@@ -6,7 +6,8 @@
 npx continues
 ```
 
-<video src="https://github.com/yigitkonur/cli-continues/raw/main/demo.mp4" autoplay loop muted playsinline width="100%"></video>
+https://github.com/user-attachments/assets/6945f3a5-bd19-45ab-9702-6df8e165a734
+
 
 [![npm version](https://img.shields.io/npm/v/continues.svg)](https://www.npmjs.com/package/continues)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
