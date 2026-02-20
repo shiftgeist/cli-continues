@@ -43,12 +43,11 @@ const supportsColor = !process.env.NO_COLOR && isTTY;
 /**
  * ASCII art banner with highlighted 's' (the "continues" brand mark)
  *
- * Block-font letters (4-char wide, 3 rows + accent line):
+ * All letters are exactly 4 chars wide, 1-space separated, 3 rows:
  *   c: █▀▀▀ / █    / ▀▀▀▀    o: █▀▀█ / █  █ / ▀▀▀▀
- *   n: █▀▀▄ / █  █ / ▀  ▀    t: ▀█▀▀ /  █   /  ▀
- *   i: (▄ dot) /  █   /  █   /  ▀
- *   u: █  █ / █  █ / ▀▀▀▀    e: █▀▀█ / █▀▀▀ / ▀▀▀▀
- *   s: █▀▀▀ / ▀▀▀█ / ▀▀▀▀
+ *   n: █▀▀▄ / █  █ / ▀  ▀    t: ▀██▀ /  ██  /  ▀▀
+ *   i:  ▄▄  /  ██  /  ▀▀     u: █  █ / █  █ / ▀▀▀▀
+ *   e: █▀▀█ / █▀▀  / ▀▀▀▀    s: █▀▀▀ / ▀▀▀█ / ▀▀▀▀
  */
 function showBanner(): void {
   if (!supportsColor) return;
@@ -58,10 +57,9 @@ function showBanner(): void {
   const dim = chalk.gray;
 
   console.log();
-  console.log(t('                       ▄'));
-  console.log(t('  █▀▀▀ █▀▀█ █▀▀▄ ▀█▀▀  █   █▀▀▄ █  █ █▀▀█ ') + s('█▀▀▀'));
-  console.log(t('  █    █  █ █  █  █    █  █  █ █  █ █▀▀▀ ') + s('▀▀▀█'));
-  console.log(t('  ▀▀▀▀ ▀▀▀▀ ▀  ▀  ▀    ▀  ▀  ▀ ▀▀▀▀ ▀▀▀▀ ') + s('▀▀▀▀'));
+  console.log(t('  █▀▀▀ █▀▀█ █▀▀▄ ▀██▀  ▄▄  █▀▀▄ █  █ █▀▀█ ') + s('█▀▀▀'));
+  console.log(t('  █    █  █ █  █  ██   ██  █  █ █  █ █▀▀  ') + s('▀▀▀█'));
+  console.log(t('  ▀▀▀▀ ▀▀▀▀ ▀  ▀  ▀▀   ▀▀  ▀  ▀ ▀▀▀▀ ▀▀▀▀ ') + s('▀▀▀▀'));
   console.log();
   console.log('  ' + lbl('Session'.padEnd(10)) + dim('Resume any AI coding session, never lose context'));
   console.log('  ' + lbl('Continue'.padEnd(10)) + dim(`v${VERSION} — cont <n> or continues <tool>`));
