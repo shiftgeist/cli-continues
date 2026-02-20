@@ -31,34 +31,47 @@ interface CursorTranscriptLine {
 
 /**
  * Derive cwd from the project slug directory name.
- * Slug format: path separators replaced with dashes
- * e.g. "Users-evolution-Sites-localhost-readybyte-test" → "/Users/evolution/Sites/localhost/readybyte-test"
+ * Cursor replaces both `/` and `.` with `-` in the slug, e.g.:
+ *   "Users-evolution-Sites-localhost-dzcm-test" → "/Users/evolution/Sites/localhost/dzcm.test"
  *
- * This is inherently ambiguous (directory names may contain dashes),
- * so we use the file system to resolve: try replacing each dash
- * from left to right and keep the longest prefix that exists on disk.
+ * Uses recursive backtracking: at each dash, tries `/`, `.`, or literal `-`.
+ * Intermediate directories that don't yet exist on disk are still explored
+ * because the final combined name (e.g. "dzcm.test") may exist.
  */
 function cwdFromSlug(slug: string): string {
-  // First try a simple reconstruction that checks the filesystem
   const parts = slug.split('-');
-  let resolved = '';
+  let best: string | null = null;
 
-  for (let i = 0; i < parts.length; i++) {
-    const candidate = resolved ? resolved + '/' + parts[i] : '/' + parts[i];
-    if (fs.existsSync(candidate)) {
-      resolved = candidate;
-    } else {
-      // The rest belongs to the current path segment (directory name with dashes)
-      const remainder = parts.slice(i).join('-');
-      resolved = resolved + '/' + remainder;
-      if (fs.existsSync(resolved)) break;
-      // If that doesn't exist either, just use the simple dash→slash conversion
-      resolved = '/' + slug.replace(/-/g, '/');
-      break;
+  function resolve(idx: number, segments: string[]): void {
+    if (best) return; // already found a match
+
+    if (idx >= parts.length) {
+      const p = '/' + segments.join('/');
+      if (fs.existsSync(p)) best = p;
+      return;
+    }
+
+    const part = parts[idx];
+
+    // Option 1: treat dash as path separator (new directory)
+    resolve(idx + 1, [...segments, part]);
+    if (best) return;
+
+    if (segments.length > 0) {
+      const last = segments[segments.length - 1];
+      const rest = segments.slice(0, -1);
+
+      // Option 2: treat dash as dot (e.g. dzcm-test → dzcm.test)
+      resolve(idx + 1, [...rest, last + '.' + part]);
+      if (best) return;
+
+      // Option 3: keep as literal dash (e.g. laravel-contentai)
+      resolve(idx + 1, [...rest, last + '-' + part]);
     }
   }
 
-  return resolved || '/' + slug.replace(/-/g, '/');
+  resolve(0, []);
+  return best || '/' + slug.replace(/-/g, '/');
 }
 
 /**
