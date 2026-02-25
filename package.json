@@ -1,6 +1,6 @@
 {
   "name": "continues",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "Never lose context. Resume any AI coding session across Claude, Copilot, Gemini, Codex, OpenCode, Droid & Cursor.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
