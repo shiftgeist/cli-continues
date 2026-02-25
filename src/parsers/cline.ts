@@ -333,9 +333,7 @@ async function parseSessionsForSource(filterSource?: ClineSource): Promise<Unifi
 
       sessions.push({
         id: taskId,
-        // Cast needed: cline/roo-code/kilo-code aren't in SessionSource yet
-        // (tool-names.ts modification is out of scope for this task)
-        source: source as unknown as SessionSource,
+        source: source as SessionSource,
         cwd: '',
         lines: messages.length,
         bytes: fileStats.size,

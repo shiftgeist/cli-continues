@@ -4,7 +4,6 @@ import { logger } from '../logger.js';
 import type {
   ConversationMessage,
   SessionContext,
-  SessionSource,
   UnifiedSession,
 } from '../types/index.js';
 import { extractTextFromBlocks } from '../utils/content.js';
@@ -131,7 +130,7 @@ export async function parseKiroSessions(): Promise<UnifiedSession[]> {
       sessions.push({
         id: session.sessionId,
         // Type assertion: 'kiro' will be added to TOOL_NAMES separately
-        source: 'kiro' as SessionSource,
+        source: 'kiro',
         cwd: session.workspacePath || '',
         lines: session.history.length,
         bytes: fileStats.size,

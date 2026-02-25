@@ -15,7 +15,7 @@ import type { VerbosityConfig } from '../config/index.js';
 import { getPreset } from '../config/index.js';
 
 // 'crush' is not yet in TOOL_NAMES — use a type assertion until registration is added.
-const CRUSH_SOURCE = 'crush' as SessionSource;
+const CRUSH_SOURCE: SessionSource = 'crush';
 
 const CRUSH_DB_PATH = path.join(homeDir(), '.crush', 'crush.db');
 

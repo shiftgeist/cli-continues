@@ -8,7 +8,6 @@ import type {
   ToolUsageSummary,
   UnifiedSession,
 } from '../types/index.js';
-import type { SessionSource } from '../types/tool-names.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { cleanSummary, homeDir } from '../utils/parser-helpers.js';
 import { findFiles } from '../utils/fs-helpers.js';
@@ -186,7 +185,7 @@ export async function parseAmpSessions(): Promise<UnifiedSession[]> {
 
       sessions.push({
         id: thread.id,
-        source: 'amp' as SessionSource,
+        source: 'amp',
         cwd: '',
         repo: '',
         lines,

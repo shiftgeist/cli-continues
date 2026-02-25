@@ -15,8 +15,7 @@ import { getPreset } from '../config/index.js';
 
 const ANTIGRAVITY_BASE_DIR = path.join(homeDir(), '.gemini', 'antigravity', 'code_tracker');
 
-// Not yet registered in TOOL_NAMES — cast until it is added to the registry.
-const SOURCE_NAME = 'antigravity' as SessionSource;
+const SOURCE_NAME: SessionSource = 'antigravity';
 
 // ⚠️  FORMAT NOTE: This parser handles JSONL conversation logs from Antigravity's
 // code_tracker directory. Real Antigravity installations may also store raw file

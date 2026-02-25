@@ -131,17 +131,17 @@ export function generateHandoffMarkdown(
     lines.push(`| **Model** | ${sessionNotes.model} |`);
   }
   lines.push(`| **Last Active** | ${session.updatedAt.toISOString().slice(0, 16).replace('T', ' ')} |`);
-  if (sessionNotes?.tokenUsage) {
+  if (sessionNotes?.tokenUsage && (sessionNotes.tokenUsage.input > 0 || sessionNotes.tokenUsage.output > 0)) {
     lines.push(
       `| **Tokens Used** | ${sessionNotes.tokenUsage.input.toLocaleString()} in / ${sessionNotes.tokenUsage.output.toLocaleString()} out |`,
     );
   }
-  if (sessionNotes?.cacheTokens) {
+  if (sessionNotes?.cacheTokens && (sessionNotes.cacheTokens.read > 0 || sessionNotes.cacheTokens.creation > 0)) {
     lines.push(
       `| **Cache Tokens** | ${sessionNotes.cacheTokens.read.toLocaleString()} read / ${sessionNotes.cacheTokens.creation.toLocaleString()} created |`,
     );
   }
-  if (sessionNotes?.thinkingTokens) {
+  if (sessionNotes?.thinkingTokens && sessionNotes.thinkingTokens > 0) {
     lines.push(`| **Thinking Tokens** | ${sessionNotes.thinkingTokens.toLocaleString()} |`);
   }
   if (sessionNotes?.activeTimeMs) {
@@ -185,7 +185,7 @@ export function generateHandoffMarkdown(
   if (sessionNotes?.reasoning && sessionNotes.reasoning.length > 0) {
     lines.push('## Key Decisions');
     lines.push('');
-    for (const thought of sessionNotes.reasoning.slice(0, 5)) {
+    for (const thought of sessionNotes.reasoning.slice(0, config.thinking.maxHighlights)) {
       lines.push(`- ${thought}`);
     }
     lines.push('');
