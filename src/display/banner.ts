@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 
 /**
- * ASCII art banner with indigo->cyan gradient and highlighted 's' brand mark.
+ * ASCII art banner with warm-to-cool gradient and highlighted 's' brand mark.
  * All letters are exactly 4 chars wide, 1-space separated, 3 rows.
  */
 export function showBanner(version: string, supportsColor: boolean): void {
@@ -20,17 +20,17 @@ export function showBanner(version: string, supportsColor: boolean): void {
     ['\u2588\u2580\u2580\u2580', '\u2580\u2580\u2580\u2588', '\u2580\u2580\u2580\u2580'], // s
   ];
 
-  // Gradient: soft indigo -> bright cyan, with 's' in bold mint
+  // Gradient: coral -> orange -> gold -> emerald -> blue -> sky -> purple -> mint
   const colors = [
-    chalk.hex('#9b8ec9'), // c
-    chalk.hex('#8a9ed7'), // o
-    chalk.hex('#79aee5'), // n
-    chalk.hex('#68bef3'), // t
-    chalk.hex('#57ceff'), // i
-    chalk.hex('#4ad6ff'), // n
-    chalk.hex('#3cdeff'), // u
-    chalk.hex('#2ee6ff'), // e
-    chalk.hex('#00ffc8').bold, // s
+    chalk.hex('#FF6B6B'),        // c — coral
+    chalk.hex('#FF8E53'),        // o — orange
+    chalk.hex('#FFA940'),        // n — amber
+    chalk.hex('#FFD93D'),        // t — gold
+    chalk.hex('#6BCB77'),        // i — emerald
+    chalk.hex('#4D96FF'),        // n — blue
+    chalk.hex('#38B6FF'),        // u — sky
+    chalk.hex('#6C5CE7'),        // e — purple
+    chalk.hex('#00FFC8').bold,   // s — mint
   ];
 
   console.log();
@@ -43,7 +43,9 @@ export function showBanner(version: string, supportsColor: boolean): void {
     console.log(line);
   }
   console.log();
-  console.log('  ' + chalk.cyan('Session'.padEnd(10)) + chalk.gray('Resume any AI coding session, never lose context'));
-  console.log('  ' + chalk.cyan('Continue'.padEnd(10)) + chalk.gray(`v${version} \u2014 cont <n> or continues <tool>`));
+  console.log('  ' + chalk.bold.white('v' + version) + chalk.gray(' — never lose context across ') + chalk.cyan('14 AI coding agents'));
+  console.log();
+  console.log('  ' + chalk.gray('🔄 Cross-tool handoff') + chalk.gray(' · ') + chalk.gray('🔎 Inspect mode') + chalk.gray(' · ') + chalk.gray('⚙️  YAML config') + chalk.gray(' · ') + chalk.gray('🌍 Env var overrides'));
+  console.log('  ' + chalk.gray('💡 cont <n> or continues <tool> to quick-resume'));
   console.log();
 }
