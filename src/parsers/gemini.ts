@@ -17,7 +17,9 @@ import { cleanSummary, homeDir } from '../utils/parser-helpers.js';
 import { classifyToolName } from '../types/tool-names.js';
 import { fileSummary, mcpSummary, shellSummary, SummaryCollector, truncate } from '../utils/tool-summarizer.js';
 
-const GEMINI_BASE_DIR = path.join(homeDir(), '.gemini', 'tmp');
+const GEMINI_BASE_DIR = process.env.GEMINI_CLI_HOME
+  ? path.join(process.env.GEMINI_CLI_HOME, '.gemini', 'tmp')
+  : path.join(homeDir(), '.gemini', 'tmp');
 
 /**
  * Find all Gemini session files

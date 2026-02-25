@@ -22,7 +22,9 @@ import { findFiles, listSubdirectories } from '../utils/fs-helpers.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { extractRepoFromCwd, homeDir } from '../utils/parser-helpers.js';
 
-const OPENCODE_BASE_DIR = path.join(homeDir(), '.local', 'share', 'opencode');
+const OPENCODE_BASE_DIR = process.env.XDG_DATA_HOME
+  ? path.join(process.env.XDG_DATA_HOME, 'opencode')
+  : path.join(homeDir(), '.local', 'share', 'opencode');
 const OPENCODE_STORAGE_DIR = path.join(OPENCODE_BASE_DIR, 'storage');
 const OPENCODE_DB_PATH = path.join(OPENCODE_BASE_DIR, 'opencode.db');
 

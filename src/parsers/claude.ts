@@ -15,7 +15,9 @@ import {
 } from '../utils/tool-extraction.js';
 import { truncate } from '../utils/tool-summarizer.js';
 
-const CLAUDE_PROJECTS_DIR = path.join(homeDir(), '.claude', 'projects');
+const CLAUDE_PROJECTS_DIR = process.env.CLAUDE_CONFIG_DIR
+  ? path.join(process.env.CLAUDE_CONFIG_DIR, 'projects')
+  : path.join(homeDir(), '.claude', 'projects');
 
 /**
  * Find all Claude session files recursively

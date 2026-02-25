@@ -24,7 +24,9 @@ import {
   withResult,
 } from '../utils/tool-summarizer.js';
 
-const CODEX_SESSIONS_DIR = path.join(homeDir(), '.codex', 'sessions');
+const CODEX_SESSIONS_DIR = process.env.CODEX_HOME
+  ? path.join(process.env.CODEX_HOME, 'sessions')
+  : path.join(homeDir(), '.codex', 'sessions');
 
 /**
  * Find all Codex session files recursively
