@@ -403,9 +403,9 @@ async function extractContextShared(
 
 // ── Public API: Cline ───────────────────────────────────────────────────────
 
-/** Discover sessions for ALL three Cline-family extensions */
+/** Discover sessions for Cline only */
 export async function parseClineSessions(): Promise<UnifiedSession[]> {
-  return parseSessionsForSource();
+  return parseSessionsForSource('cline');
 }
 
 /** Extract context from a Cline session */

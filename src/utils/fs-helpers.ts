@@ -34,8 +34,17 @@ export function findFiles(root: string, options: FindFilesOptions): string[] {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
-        const isDir = entry.isDirectory() || (entry.isSymbolicLink() && fs.statSync(fullPath).isDirectory());
-        const isFile = entry.isFile() || (entry.isSymbolicLink() && fs.statSync(fullPath).isFile());
+        let isDir = entry.isDirectory();
+        let isFile = entry.isFile();
+        if (entry.isSymbolicLink()) {
+          try {
+            const stat = fs.statSync(fullPath);
+            isDir = stat.isDirectory();
+            isFile = stat.isFile();
+          } catch {
+            continue; // broken symlink — skip gracefully
+          }
+        }
         if (isDir && recursive) {
           walk(fullPath, depth + 1);
         } else if (isFile && options.match(entry, fullPath)) {
@@ -61,7 +70,17 @@ export function listSubdirectories(dir: string): string[] {
   try {
     return fs
       .readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isDirectory() || (e.isSymbolicLink() && fs.statSync(path.join(dir, e.name)).isDirectory()))
+      .filter((e) => {
+        if (e.isDirectory()) return true;
+        if (e.isSymbolicLink()) {
+          try {
+            return fs.statSync(path.join(dir, e.name)).isDirectory();
+          } catch {
+            return false; // broken symlink — skip gracefully
+          }
+        }
+        return false;
+      })
       .map((e) => path.join(dir, e.name));
   } catch (err) {
     logger.debug('listSubdirectories: cannot read directory', dir, err);

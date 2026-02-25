@@ -16,6 +16,35 @@ import { classifyToolName } from '../types/tool-names.js';
 import { findSession } from '../utils/index.js';
 import { readJsonlFile } from '../utils/jsonl.js';
 
+// ── Format Detection ────────────────────────────────────────────────────────
+
+type SessionFormat = 'jsonl' | 'json' | 'sqlite' | 'yaml';
+
+function getSessionFormat(source: string): SessionFormat {
+  switch (source) {
+    case 'claude':
+    case 'codex':
+    case 'droid':
+    case 'cursor':
+    case 'antigravity':
+      return 'jsonl';
+    case 'gemini':
+    case 'amp':
+    case 'kiro':
+    case 'cline':
+    case 'roo-code':
+    case 'kilo-code':
+      return 'json';
+    case 'crush':
+    case 'opencode':
+      return 'sqlite';
+    case 'copilot':
+      return 'yaml';
+    default:
+      return 'jsonl';
+  }
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Format bytes into a human-readable string (KB, MB, GB). */
@@ -616,14 +645,33 @@ export async function inspectSession(
     config = loadConfig();
   }
 
-  // 2. Read raw JSONL for event counting
-  const rawMessages = await readJsonlFile<Record<string, unknown>>(session.originalPath);
+  // 2. Read raw events (format-aware)
+  const format = getSessionFormat(session.source);
+  let rawMessages: Array<Record<string, unknown>> = [];
+  let rawEventNote = '';
+
+  if (format === 'jsonl') {
+    rawMessages = await readJsonlFile<Record<string, unknown>>(session.originalPath);
+  } else if (format === 'json') {
+    try {
+      const content = fs.readFileSync(session.originalPath, 'utf-8');
+      const parsed = JSON.parse(content);
+      rawMessages = Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      rawEventNote = '(JSON parse failed)';
+    }
+  } else if (format === 'sqlite') {
+    rawEventNote = '(raw event analysis not available for SQLite sessions)';
+  } else if (format === 'yaml') {
+    rawEventNote = '(raw event analysis not available for YAML sessions)';
+  }
+
   const { events, blocks, tools, model } = analyzeRawMessages(rawMessages);
 
   // 3. File stats
   const mainFileStats = fs.statSync(session.originalPath);
   const mainSize = mainFileStats.size;
-  const mainLines = rawMessages.length; // Each parsed line = one event
+  const mainLines = format === 'jsonl' ? rawMessages.length : countLines(session.originalPath);
 
   // 4. Subagent & tool-result files (Claude-specific)
   const sessionDir = session.originalPath.replace(/\.jsonl$/, '');
@@ -674,6 +722,9 @@ export async function inspectSession(
         opts.truncate,
       ),
     );
+    if (rawMessages.length === 0 && rawEventNote) {
+      console.log(chalk.gray(`  ${rawEventNote}`));
+    }
     return;
   }
 
@@ -685,6 +736,9 @@ export async function inspectSession(
     renderSourceFiles(session, mainLines, mainSize, subagentFiles, toolResultFiles),
   );
   output.push(renderEventDistribution(events, session.source));
+  if (rawMessages.length === 0 && rawEventNote) {
+    output.push(chalk.gray(`  ${rawEventNote}\n`));
+  }
 
   if (blocks.total > 0) {
     output.push(renderContentBlocks(blocks));
