@@ -10,13 +10,19 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ConversationMessage, SessionContext, SessionSource, UnifiedSession } from '../types/index.js';
 import { generateHandoffMarkdown, getSourceLabels } from '../utils/markdown.js';
 import {
+  createAmpFixture,
+  createAntigravityFixture,
   createClaudeFixture,
+  createClineFixture,
   createCodexFixture,
   createCopilotFixture,
   createCursorFixture,
   createDroidFixture,
   createGeminiFixture,
+  createKiloCodeFixture,
+  createKiroFixture,
   createOpenCodeSqliteFixture,
+  createRooCodeFixture,
   type FixtureDir,
 } from './fixtures/index.js';
 
@@ -256,6 +262,75 @@ function parseDroidFixtureMessages(filePath: string): ConversationMessage[] {
   return messages;
 }
 
+function parseAmpFixtureMessages(filePath: string): ConversationMessage[] {
+  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  const messages: ConversationMessage[] = [];
+
+  for (const msg of data.messages || []) {
+    if (msg.role === 'user' && msg.content) {
+      messages.push({ role: 'user', content: msg.content });
+    } else if (msg.role === 'assistant' && msg.content) {
+      messages.push({ role: 'assistant', content: msg.content });
+    }
+  }
+  return messages;
+}
+
+function parseKiroFixtureMessages(filePath: string): ConversationMessage[] {
+  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  const messages: ConversationMessage[] = [];
+
+  for (const msg of data.history || []) {
+    if (msg.role === 'human' && msg.content) {
+      messages.push({ role: 'user', content: msg.content });
+    } else if (msg.role === 'assistant' && msg.content) {
+      messages.push({ role: 'assistant', content: msg.content });
+    }
+  }
+  return messages;
+}
+
+function parseClineFixtureMessages(filePath: string): ConversationMessage[] {
+  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  const messages: ConversationMessage[] = [];
+
+  for (const msg of data) {
+    if (msg.type !== 'say' || !msg.text) continue;
+    if (msg.say === 'task') {
+      messages.push({ role: 'user', content: msg.text, timestamp: new Date(msg.ts) });
+    } else if (msg.say === 'text') {
+      messages.push({ role: 'assistant', content: msg.text, timestamp: new Date(msg.ts) });
+    }
+  }
+  return messages;
+}
+
+function parseAntigravityFixtureMessages(filePath: string): ConversationMessage[] {
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.trim().split('\n');
+  const messages: ConversationMessage[] = [];
+
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line);
+      const text = (parsed.parts || [])
+        .filter((p: any) => p.text)
+        .map((p: any) => p.text)
+        .join('\n');
+      if (!text) continue;
+
+      if (parsed.role === 'user') {
+        messages.push({ role: 'user', content: text });
+      } else if (parsed.role === 'model') {
+        messages.push({ role: 'assistant', content: text });
+      }
+    } catch {
+      /* skip */
+    }
+  }
+  return messages;
+}
+
 // ─── Fixture Data ────────────────────────────────────────────────────────────
 
 // Derive from registry — automatically picks up new tools
@@ -275,6 +350,12 @@ beforeAll(() => {
   fixtures.opencode = createOpenCodeSqliteFixture();
   fixtures.droid = createDroidFixture();
   fixtures.cursor = createCursorFixture();
+  fixtures.amp = createAmpFixture();
+  fixtures.kiro = createKiroFixture();
+  fixtures.cline = createClineFixture();
+  fixtures['roo-code'] = createRooCodeFixture();
+  fixtures['kilo-code'] = createKiloCodeFixture();
+  fixtures.antigravity = createAntigravityFixture();
 
   // Build contexts from fixtures
   const now = new Date();
@@ -471,6 +552,198 @@ beforeAll(() => {
     pendingTasks: [],
     toolSummaries: [],
     markdown: generateHandoffMarkdown(cursorSession, cursorMsgs, [], [], []),
+  };
+
+  // Amp
+  const ampFile = fs
+    .readdirSync(fixtures.amp.root)
+    .map((f) => path.join(fixtures.amp.root, f as string))
+    .find((f) => f.endsWith('.json'))!;
+  const ampSession: UnifiedSession = {
+    id: 'test-amp-session-1',
+    source: 'amp',
+    cwd: '/home/user/project',
+    repo: 'user/project',
+    lines: 4,
+    bytes: 800,
+    createdAt: now,
+    updatedAt: now,
+    originalPath: ampFile,
+    summary: 'Fix auth bug',
+    model: 'claude-sonnet-4',
+  };
+  const ampMsgs = parseAmpFixtureMessages(ampFile);
+  contexts.amp = {
+    session: ampSession,
+    recentMessages: ampMsgs,
+    filesModified: [],
+    pendingTasks: [],
+    toolSummaries: [],
+    markdown: generateHandoffMarkdown(ampSession, ampMsgs, [], [], []),
+  };
+
+  // Kiro
+  const kiroFile = fs
+    .readdirSync(fixtures.kiro.root)
+    .map((f) => path.join(fixtures.kiro.root, f as string))
+    .find((f) => f.endsWith('.json'))!;
+  const kiroSession: UnifiedSession = {
+    id: 'test-kiro-session-1',
+    source: 'kiro',
+    cwd: '/home/user/project',
+    repo: 'user/project',
+    lines: 4,
+    bytes: 600,
+    createdAt: now,
+    updatedAt: now,
+    originalPath: kiroFile,
+    summary: 'Fix auth bug',
+    model: 'claude-sonnet-4',
+  };
+  const kiroMsgs = parseKiroFixtureMessages(kiroFile);
+  contexts.kiro = {
+    session: kiroSession,
+    recentMessages: kiroMsgs,
+    filesModified: [],
+    pendingTasks: [],
+    toolSummaries: [],
+    markdown: generateHandoffMarkdown(kiroSession, kiroMsgs, [], [], []),
+  };
+
+  // Crush — inline context (no file fixture; real parser uses SQLite)
+  const crushSession: UnifiedSession = {
+    id: 'test-crush-session-1',
+    source: 'crush',
+    cwd: '/home/user/project',
+    repo: 'user/project',
+    lines: 4,
+    bytes: 500,
+    createdAt: now,
+    updatedAt: now,
+    originalPath: '/tmp/crush-mock',
+    summary: 'Fix auth bug',
+  };
+  const crushMsgs: ConversationMessage[] = [
+    { role: 'user', content: 'Fix the authentication bug in login.ts' },
+    { role: 'assistant', content: 'I found the issue in login.ts. The token validation was missing.' },
+    { role: 'user', content: 'Great, please also add error handling' },
+    { role: 'assistant', content: 'Done. I added try-catch blocks and proper error messages.' },
+  ];
+  contexts.crush = {
+    session: crushSession,
+    recentMessages: crushMsgs,
+    filesModified: [],
+    pendingTasks: [],
+    toolSummaries: [],
+    markdown: generateHandoffMarkdown(crushSession, crushMsgs, [], [], []),
+  };
+
+  // Cline
+  const clineFile = fs
+    .readdirSync(fixtures.cline.root, { recursive: true })
+    .map((f) => path.join(fixtures.cline.root, f as string))
+    .find((f) => f.endsWith('ui_messages.json'))!;
+  const clineSession: UnifiedSession = {
+    id: 'test-cline-session-1',
+    source: 'cline',
+    cwd: '/home/user/project',
+    repo: 'user/project',
+    lines: 4,
+    bytes: 700,
+    createdAt: now,
+    updatedAt: now,
+    originalPath: clineFile,
+    summary: 'Fix auth bug',
+  };
+  const clineMsgs = parseClineFixtureMessages(clineFile);
+  contexts.cline = {
+    session: clineSession,
+    recentMessages: clineMsgs,
+    filesModified: [],
+    pendingTasks: [],
+    toolSummaries: [],
+    markdown: generateHandoffMarkdown(clineSession, clineMsgs, [], [], []),
+  };
+
+  // Roo Code
+  const rooCodeFile = fs
+    .readdirSync(fixtures['roo-code'].root, { recursive: true })
+    .map((f) => path.join(fixtures['roo-code'].root, f as string))
+    .find((f) => f.endsWith('ui_messages.json'))!;
+  const rooCodeSession: UnifiedSession = {
+    id: 'test-roo-code-session-1',
+    source: 'roo-code',
+    cwd: '/home/user/project',
+    repo: 'user/project',
+    lines: 4,
+    bytes: 700,
+    createdAt: now,
+    updatedAt: now,
+    originalPath: rooCodeFile,
+    summary: 'Fix auth bug',
+  };
+  const rooCodeMsgs = parseClineFixtureMessages(rooCodeFile);
+  contexts['roo-code'] = {
+    session: rooCodeSession,
+    recentMessages: rooCodeMsgs,
+    filesModified: [],
+    pendingTasks: [],
+    toolSummaries: [],
+    markdown: generateHandoffMarkdown(rooCodeSession, rooCodeMsgs, [], [], []),
+  };
+
+  // Kilo Code
+  const kiloCodeFile = fs
+    .readdirSync(fixtures['kilo-code'].root, { recursive: true })
+    .map((f) => path.join(fixtures['kilo-code'].root, f as string))
+    .find((f) => f.endsWith('ui_messages.json'))!;
+  const kiloCodeSession: UnifiedSession = {
+    id: 'test-kilo-code-session-1',
+    source: 'kilo-code',
+    cwd: '/home/user/project',
+    repo: 'user/project',
+    lines: 4,
+    bytes: 700,
+    createdAt: now,
+    updatedAt: now,
+    originalPath: kiloCodeFile,
+    summary: 'Fix auth bug',
+  };
+  const kiloCodeMsgs = parseClineFixtureMessages(kiloCodeFile);
+  contexts['kilo-code'] = {
+    session: kiloCodeSession,
+    recentMessages: kiloCodeMsgs,
+    filesModified: [],
+    pendingTasks: [],
+    toolSummaries: [],
+    markdown: generateHandoffMarkdown(kiloCodeSession, kiloCodeMsgs, [], [], []),
+  };
+
+  // Antigravity
+  const antigravityFile = fs
+    .readdirSync(fixtures.antigravity.root)
+    .map((f) => path.join(fixtures.antigravity.root, f as string))
+    .find((f) => f.endsWith('.jsonl'))!;
+  const antigravitySession: UnifiedSession = {
+    id: 'test-antigravity-session-1',
+    source: 'antigravity',
+    cwd: '/home/user/project',
+    repo: 'user/project',
+    lines: 4,
+    bytes: 600,
+    createdAt: now,
+    updatedAt: now,
+    originalPath: antigravityFile,
+    summary: 'Fix auth bug',
+  };
+  const antigravityMsgs = parseAntigravityFixtureMessages(antigravityFile);
+  contexts.antigravity = {
+    session: antigravitySession,
+    recentMessages: antigravityMsgs,
+    filesModified: [],
+    pendingTasks: [],
+    toolSummaries: [],
+    markdown: generateHandoffMarkdown(antigravitySession, antigravityMsgs, [], [], []),
   };
 });
 
@@ -942,12 +1215,12 @@ describe('Injection Safety (Fixture-Based)', () => {
 // ─── Unique Session ID Test ─────────────────────────────────────────────────
 
 describe('Cross-Source Uniqueness', () => {
-  it('all 7 sources produce different session IDs', () => {
+  it('all sources produce different session IDs', () => {
     const ids = new Set(ALL_SOURCES.map((s) => contexts[s].session.id));
-    expect(ids.size).toBe(7);
+    expect(ids.size).toBe(ALL_SOURCES.length);
   });
 
-  it('all 7 sources have correct source type', () => {
+  it('all sources have correct source type', () => {
     for (const source of ALL_SOURCES) {
       expect(contexts[source].session.source).toBe(source);
     }

@@ -705,6 +705,178 @@ export function createCursorFixture(): FixtureDir {
 }
 
 /**
+ * Create a temporary directory with Amp session fixtures
+ */
+export function createAmpFixture(): FixtureDir {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'test-amp-'));
+
+  const session = {
+    id: 'thread-amp-test-1',
+    created: 1705312800000,
+    messages: [
+      { role: 'user', content: 'Fix the authentication bug in login.ts' },
+      {
+        role: 'assistant',
+        content: 'I found the issue in login.ts. The token validation was missing.',
+        model: 'claude-sonnet-4',
+        usage: { input_tokens: 500, output_tokens: 450 },
+      },
+      { role: 'user', content: 'Great, please also add error handling' },
+      {
+        role: 'assistant',
+        content: 'Done. I added try-catch blocks and proper error messages.',
+        model: 'claude-sonnet-4',
+        usage: { input_tokens: 600, output_tokens: 380 },
+      },
+    ],
+  };
+
+  fs.writeFileSync(path.join(root, 'thread-amp-test-1.json'), JSON.stringify(session, null, 2));
+
+  return {
+    root,
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * Create a temporary directory with Kiro session fixtures
+ */
+export function createKiroFixture(): FixtureDir {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'test-kiro-'));
+
+  const session = {
+    workspacePath: '/home/user/project',
+    selectedModel: 'claude-sonnet-4',
+    history: [
+      { role: 'human', content: 'Fix the authentication bug in login.ts' },
+      { role: 'assistant', content: 'I found the issue in login.ts. The token validation was missing.' },
+      { role: 'human', content: 'Great, please also add error handling' },
+      { role: 'assistant', content: 'Done. I added try-catch blocks and proper error messages.' },
+    ],
+  };
+
+  fs.writeFileSync(path.join(root, 'session-kiro-test-1.json'), JSON.stringify(session, null, 2));
+
+  return {
+    root,
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * Create a temporary directory with Cline session fixtures (ui_messages.json format).
+ * This format is shared by cline, roo-code, and kilo-code.
+ */
+export function createClineFixture(): FixtureDir {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'test-cline-'));
+  const taskDir = path.join(root, 'task-cline-test-1');
+  fs.mkdirSync(taskDir, { recursive: true });
+
+  const messages = [
+    { ts: 1705312800000, type: 'say', say: 'task', text: 'Fix the authentication bug in login.ts' },
+    {
+      ts: 1705312801000,
+      type: 'say',
+      say: 'text',
+      text: 'I found the issue in login.ts. The token validation was missing.',
+    },
+    { ts: 1705312810000, type: 'say', say: 'task', text: 'Great, please also add error handling' },
+    { ts: 1705312811000, type: 'say', say: 'text', text: 'Done. I added try-catch blocks and proper error messages.' },
+  ];
+
+  fs.writeFileSync(path.join(taskDir, 'ui_messages.json'), JSON.stringify(messages, null, 2));
+
+  return {
+    root,
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * Create a temporary directory with Roo Code session fixtures (same format as Cline)
+ */
+export function createRooCodeFixture(): FixtureDir {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'test-roo-code-'));
+  const taskDir = path.join(root, 'task-roo-code-test-1');
+  fs.mkdirSync(taskDir, { recursive: true });
+
+  const messages = [
+    { ts: 1705312900000, type: 'say', say: 'task', text: 'Fix the authentication bug in login.ts' },
+    {
+      ts: 1705312901000,
+      type: 'say',
+      say: 'text',
+      text: 'I found the issue in login.ts. The token validation was missing.',
+    },
+    { ts: 1705312910000, type: 'say', say: 'task', text: 'Great, please also add error handling' },
+    { ts: 1705312911000, type: 'say', say: 'text', text: 'Done. I added try-catch blocks and proper error messages.' },
+  ];
+
+  fs.writeFileSync(path.join(taskDir, 'ui_messages.json'), JSON.stringify(messages, null, 2));
+
+  return {
+    root,
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * Create a temporary directory with Kilo Code session fixtures (same format as Cline)
+ */
+export function createKiloCodeFixture(): FixtureDir {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'test-kilo-code-'));
+  const taskDir = path.join(root, 'task-kilo-code-test-1');
+  fs.mkdirSync(taskDir, { recursive: true });
+
+  const messages = [
+    { ts: 1705313000000, type: 'say', say: 'task', text: 'Fix the authentication bug in login.ts' },
+    {
+      ts: 1705313001000,
+      type: 'say',
+      say: 'text',
+      text: 'I found the issue in login.ts. The token validation was missing.',
+    },
+    { ts: 1705313010000, type: 'say', say: 'task', text: 'Great, please also add error handling' },
+    { ts: 1705313011000, type: 'say', say: 'text', text: 'Done. I added try-catch blocks and proper error messages.' },
+  ];
+
+  fs.writeFileSync(path.join(taskDir, 'ui_messages.json'), JSON.stringify(messages, null, 2));
+
+  return {
+    root,
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * Create a temporary directory with Antigravity session fixtures (JSONL with role/parts)
+ */
+export function createAntigravityFixture(): FixtureDir {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'test-antigravity-'));
+
+  const lines = [
+    JSON.stringify({ role: 'user', parts: [{ text: 'Fix the authentication bug in login.ts' }] }),
+    JSON.stringify({
+      role: 'model',
+      parts: [{ text: 'I found the issue in login.ts. The token validation was missing.' }],
+    }),
+    JSON.stringify({ role: 'user', parts: [{ text: 'Great, please also add error handling' }] }),
+    JSON.stringify({
+      role: 'model',
+      parts: [{ text: 'Done. I added try-catch blocks and proper error messages.' }],
+    }),
+  ];
+
+  fs.writeFileSync(path.join(root, 'session.jsonl'), lines.join('\n') + '\n');
+
+  return {
+    root,
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/**
  * Create OpenCode JSON-only fixture (legacy format)
  */
 export function createOpenCodeJsonFixture(): FixtureDir {
