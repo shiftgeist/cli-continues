@@ -17,7 +17,9 @@ import { interactivePick } from './commands/pick.js';
 import { resumeBySource } from './commands/quick-resume.js';
 import { rebuildCommand } from './commands/rebuild.js';
 import { resumeCommand } from './commands/resume-cmd.js';
+import { inspectSession } from './commands/inspect.js';
 import { scanCommand } from './commands/scan.js';
+import { loadConfig, getPreset, mergeConfig } from './config/index.js';
 import { setLogLevel } from './logger.js';
 import { ALL_TOOLS, adapters, SOURCE_HELP } from './parsers/registry.js';
 
@@ -75,6 +77,8 @@ program
   .version(VERSION)
   .option('--verbose', 'Show info-level logs')
   .option('--debug', 'Show debug-level logs')
+  .option('--config <path>', 'Path to .continues.yml config file')
+  .option('--preset <name>', 'Verbosity preset: minimal, standard, verbose, full', 'standard')
   .helpOption('-h, --help', 'Display help for command')
   .hook('preAction', () => {
     const opts = program.opts();
@@ -164,6 +168,18 @@ program
   .description('Force rebuild the session index cache')
   .action(async () => {
     await rebuildCommand(cliContext);
+  });
+
+// Inspect a session — parsing diagnostics
+program
+  .command('inspect <session-id>')
+  .description('Inspect a session and show parsing diagnostics')
+  .option('--truncate <n>', 'Compact output truncated to N chars per line', parseInt)
+  .option('--write-md [path]', 'Write markdown output to file')
+  .action(async (sessionId: string, opts: { truncate?: number; writeMd?: string | boolean }) => {
+    // Inherit --preset from global options (subcommand duplication causes Commander scoping bug)
+    const globalPreset = program.opts().preset as string | undefined;
+    await inspectSession(sessionId, { ...opts, preset: globalPreset });
   });
 
 // Quick resume commands for each tool — generated from the adapter registry

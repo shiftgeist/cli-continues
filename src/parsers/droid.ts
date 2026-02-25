@@ -17,6 +17,8 @@ import { getFileStats, readJsonlFile, scanJsonlHead } from '../utils/jsonl.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { cleanSummary, extractRepoFromCwd, homeDir } from '../utils/parser-helpers.js';
 import { cwdFromSlug } from '../utils/slug.js';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 import {
   type AnthropicMessage,
   extractAnthropicToolData,
@@ -234,7 +236,8 @@ function extractPendingTasks(events: DroidEvent[]): string[] {
 /**
  * Extract context from a Droid session for cross-tool continuation
  */
-export async function extractDroidContext(session: UnifiedSession): Promise<SessionContext> {
+export async function extractDroidContext(session: UnifiedSession, config?: VerbosityConfig): Promise<SessionContext> {
+  const resolvedConfig = config ?? getPreset('standard');
   const events = await readJsonlFile<DroidEvent>(session.originalPath);
   const settings = readSettings(session.originalPath);
 
@@ -243,7 +246,7 @@ export async function extractDroidContext(session: UnifiedSession): Promise<Sess
     .filter((e): e is DroidMessageEvent => e.type === 'message')
     .map((e) => ({ role: e.message.role, content: e.message.content }));
 
-  const { summaries: toolSummaries, filesModified } = extractAnthropicToolData(anthropicMsgs);
+  const { summaries: toolSummaries, filesModified } = extractAnthropicToolData(anthropicMsgs, resolvedConfig);
   const sessionNotes = extractSessionNotes(events, settings);
   const pendingTasks = extractPendingTasks(events);
 
@@ -272,7 +275,7 @@ export async function extractDroidContext(session: UnifiedSession): Promise<Sess
     });
   }
 
-  const trimmed = recentMessages.slice(-10);
+  const trimmed = recentMessages.slice(-resolvedConfig.recentMessages);
 
   const markdown = generateHandoffMarkdown(session, trimmed, filesModified, pendingTasks, toolSummaries, sessionNotes);
 

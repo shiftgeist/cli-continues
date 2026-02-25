@@ -2,6 +2,8 @@ import { adapters } from '../parsers/registry.js';
 import type {
   ConversationMessage,
   SessionNotes,
+  SubagentResult,
+  ReasoningStep,
   StructuredToolSample,
   ToolSample,
   ToolUsageSummary,
@@ -21,6 +23,8 @@ import {
   ASK_TOOLS,
   classifyToolName,
 } from '../types/tool-names.js';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 
 /** Human-readable labels for each session source — derived lazily from the adapter registry */
 let _sourceLabels: Record<string, string> | null = null;
@@ -43,25 +47,18 @@ interface DisplayCaps {
   mcpTaskAsk: number;
 }
 
-const INLINE_CAPS: DisplayCaps = {
-  shellDetailed: 5,
-  shellStdoutLines: 3,
-  writeEditDetailed: 3,
-  writeEditDiffLines: 50,
-  readEntries: 15,
-  grepGlobSearchFetch: 8,
-  mcpTaskAsk: 3,
-};
-
-const REFERENCE_CAPS: DisplayCaps = {
-  shellDetailed: 8,
-  shellStdoutLines: 5,
-  writeEditDetailed: 5,
-  writeEditDiffLines: 200,
-  readEntries: 20,
-  grepGlobSearchFetch: 10,
-  mcpTaskAsk: 5,
-};
+/** Derive display caps from a VerbosityConfig — single source of truth for all limits */
+function capsFromConfig(config: VerbosityConfig): DisplayCaps {
+  return {
+    shellDetailed: config.shell.maxSamples,
+    shellStdoutLines: config.shell.stdoutLines,
+    writeEditDetailed: config.write.maxSamples,
+    writeEditDiffLines: config.write.diffLines,
+    readEntries: config.read.maxSamples,
+    grepGlobSearchFetch: config.grep.maxSamples,
+    mcpTaskAsk: config.mcp.maxSamplesPerNamespace,
+  };
+}
 
 // ── Category Ordering ───────────────────────────────────────────────────────
 
@@ -105,9 +102,11 @@ export function generateHandoffMarkdown(
   toolSummaries: ToolUsageSummary[] = [],
   sessionNotes?: SessionNotes,
   mode: 'inline' | 'reference' = 'inline',
+  config: VerbosityConfig = getPreset('standard'),
 ): string {
   const labels = getSourceLabels();
   const sourceLabel = labels[session.source] || session.source;
+  const caps = capsFromConfig(config);
 
   const lines: string[] = [
     '# Session Handoff Context',
@@ -172,11 +171,15 @@ export function generateHandoffMarkdown(
 
   // ── Category-aware Tool Activity section ──
   if (toolSummaries.length > 0) {
-    const caps = mode === 'reference' ? REFERENCE_CAPS : INLINE_CAPS;
     lines.push('## Tool Activity');
     lines.push('');
     lines.push(...renderToolActivity(toolSummaries, caps));
     lines.push('');
+  }
+
+  // ── Subagent Results ──
+  if (sessionNotes?.subagentResults && sessionNotes.subagentResults.length > 0) {
+    lines.push(...renderSubagentResults(sessionNotes.subagentResults, config));
   }
 
   if (sessionNotes?.reasoning && sessionNotes.reasoning.length > 0) {
@@ -189,8 +192,13 @@ export function generateHandoffMarkdown(
     lines.push('');
   }
 
-  // Show last 10 messages for richer context
-  const recentMessages = messages.slice(-10);
+  // ── Reasoning Chain ──
+  if (sessionNotes?.reasoningSteps && sessionNotes.reasoningSteps.length > 0) {
+    lines.push(...renderReasoningChain(sessionNotes.reasoningSteps));
+  }
+
+  // Show recent messages for richer context
+  const recentMessages = messages.slice(-config.recentMessages);
   if (recentMessages.length > 0) {
     lines.push('## Recent Conversation');
     lines.push('');
@@ -198,7 +206,8 @@ export function generateHandoffMarkdown(
       const role = msg.role === 'user' ? 'User' : 'Assistant';
       lines.push(`### ${role}`);
       lines.push('');
-      lines.push(msg.content.slice(0, 500) + (msg.content.length > 500 ? '\u2026' : ''));
+      const maxChars = config.maxMessageChars;
+      lines.push(msg.content.slice(0, maxChars) + (msg.content.length > maxChars ? '\u2026' : ''));
       lines.push('');
     }
     lines.push('');
@@ -235,14 +244,11 @@ export function generateHandoffMarkdown(
 
 // ── MCP Namespace Grouping ───────────────────────────────────────────────────
 
-/** Max samples to keep per grouped MCP namespace */
-const MCP_GROUP_SAMPLE_CAP = 5;
-
 /**
  * Group MCP tools sharing a `mcp__<namespace>__*` prefix into a single
  * synthetic ToolUsageSummary. Non-namespaced tools pass through unchanged.
  */
-function groupMcpByNamespace(summaries: ToolUsageSummary[]): ToolUsageSummary[] {
+function groupMcpByNamespace(summaries: ToolUsageSummary[], mcpSampleCap: number): ToolUsageSummary[] {
   const result: ToolUsageSummary[] = [];
   const nsGroups = new Map<string, ToolUsageSummary[]>();
 
@@ -274,7 +280,7 @@ function groupMcpByNamespace(summaries: ToolUsageSummary[]): ToolUsageSummary[] 
     const mergedSamples: ToolSample[] = [];
     for (const t of tools) {
       for (const s of t.samples) {
-        if (mergedSamples.length < MCP_GROUP_SAMPLE_CAP) mergedSamples.push(s);
+        if (mergedSamples.length < mcpSampleCap) mergedSamples.push(s);
       }
     }
     result.push({
@@ -292,7 +298,7 @@ function groupMcpByNamespace(summaries: ToolUsageSummary[]): ToolUsageSummary[] 
 
 function renderToolActivity(toolSummaries: ToolUsageSummary[], caps: DisplayCaps): string[] {
   // Group MCP tools by namespace (e.g. mcp__github__* → "MCP: github")
-  const grouped = groupMcpByNamespace(toolSummaries);
+  const grouped = groupMcpByNamespace(toolSummaries, caps.mcpTaskAsk);
   const sorted = [...grouped].sort((a, b) => getCategoryOrder(a.name) - getCategoryOrder(b.name));
   const lines: string[] = [];
 
@@ -674,6 +680,58 @@ function formatCompactSample(sample: ToolSample, category: string): string {
     default:
       return `\`${sample.summary}\``;
   }
+}
+
+// ── Subagent Results Renderer ────────────────────────────────────────────────
+
+function renderSubagentResults(results: SubagentResult[], config: VerbosityConfig): string[] {
+  const lines: string[] = ['## Subagent Results', ''];
+
+  for (const r of results) {
+    lines.push(`### ${r.description} (${r.taskId})`);
+    if (r.status === 'completed' && r.result) {
+      const maxChars = config.task.subagentResultChars;
+      const text = r.result.length > maxChars ? r.result.slice(0, maxChars) + '\u2026' : r.result;
+      // Render each line as a blockquote
+      for (const line of text.split('\n')) {
+        lines.push(`> ${line}`);
+      }
+    } else {
+      // Non-completed: show status
+      lines.push(`> \u26a0\ufe0f ${capitalize(r.status)}`);
+    }
+    if (r.toolCallCount > 0) {
+      lines.push(`> Tools used: ${r.toolCallCount}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('');
+  return lines;
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// ── Reasoning Chain Renderer ────────────────────────────────────────────────
+
+function renderReasoningChain(steps: ReasoningStep[]): string[] {
+  const lines: string[] = ['## Reasoning Chain', ''];
+
+  for (const step of steps) {
+    const label = `**${capitalize(step.purpose)}** (step ${step.stepNumber}/${step.totalSteps})`;
+    const thought = step.thought.length > 200 ? step.thought.slice(0, 200) + '\u2026' : step.thought;
+    let line = `${step.stepNumber}. ${label}: ${thought}`;
+    if (step.nextAction) {
+      line += `\n   \u2192 Next: ${step.nextAction}`;
+    }
+    lines.push(line);
+  }
+
+  lines.push('');
+  lines.push('');
+  return lines;
 }
 
 // ── Fallback Renderer ───────────────────────────────────────────────────────

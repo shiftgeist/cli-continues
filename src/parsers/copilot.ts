@@ -9,6 +9,8 @@ import { listSubdirectories } from '../utils/fs-helpers.js';
 import { getFileStats, readJsonlFile, scanJsonlHead } from '../utils/jsonl.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { homeDir } from '../utils/parser-helpers.js';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 
 const COPILOT_SESSIONS_DIR = path.join(homeDir(), '.copilot', 'session-state');
 
@@ -99,7 +101,8 @@ export async function parseCopilotSessions(): Promise<UnifiedSession[]> {
 /**
  * Extract context from a Copilot session for cross-tool continuation
  */
-export async function extractCopilotContext(session: UnifiedSession): Promise<SessionContext> {
+export async function extractCopilotContext(session: UnifiedSession, config?: VerbosityConfig): Promise<SessionContext> {
+  const resolvedConfig = config ?? getPreset('standard');
   const eventsPath = path.join(session.originalPath, 'events.jsonl');
   const events = await readJsonlFile<CopilotEvent>(eventsPath);
 
@@ -107,7 +110,7 @@ export async function extractCopilotContext(session: UnifiedSession): Promise<Se
   const pendingTasks: string[] = [];
 
   // Process events to extract conversation
-  for (const event of events.slice(-20)) {
+  for (const event of events.slice(-resolvedConfig.recentMessages * 2)) {
     if (event.type === 'user.message') {
       const content = event.data?.content || event.data?.transformedContent || '';
       if (content) {
@@ -157,14 +160,16 @@ export async function extractCopilotContext(session: UnifiedSession): Promise<Se
   }
 
   // Extract tool summaries and file modifications from toolRequests across all events
-  const { summaries: toolSummaries, filesModified } = extractCopilotToolSummaries(events);
+  const { summaries: toolSummaries, filesModified } = extractCopilotToolSummaries(events, resolvedConfig);
+
+  const trimmed = recentMessages.slice(-resolvedConfig.recentMessages);
 
   // Generate markdown for injection
-  const markdown = generateHandoffMarkdown(session, recentMessages.slice(-10), filesModified, pendingTasks, toolSummaries);
+  const markdown = generateHandoffMarkdown(session, trimmed, filesModified, pendingTasks, toolSummaries);
 
   return {
     session,
-    recentMessages: recentMessages.slice(-10),
+    recentMessages: trimmed,
     filesModified,
     pendingTasks,
     toolSummaries,
@@ -176,9 +181,10 @@ export async function extractCopilotContext(session: UnifiedSession): Promise<Se
  * Extract tool usage summaries from Copilot events' toolRequests arrays.
  * Copilot doesn't provide tool results, so we capture names and arguments only.
  */
-function extractCopilotToolSummaries(events: CopilotEvent[]): { summaries: ToolUsageSummary[]; filesModified: string[] } {
+function extractCopilotToolSummaries(events: CopilotEvent[], config: VerbosityConfig): { summaries: ToolUsageSummary[]; filesModified: string[] } {
   const toolCounts = new Map<string, { count: number; samples: Array<{ summary: string; data?: import('../types/index.js').StructuredToolSample }> }>();
   const files = new Set<string>();
+  const defaultSampleLimit = config.mcp.maxSamplesPerNamespace;
 
   for (const event of events) {
     if (event.type !== 'assistant.message') continue;
@@ -202,7 +208,7 @@ function extractCopilotToolSummaries(events: CopilotEvent[]): { summaries: ToolU
         files.add(fp);
       }
 
-      if (entry.samples.length < 5) {
+      if (entry.samples.length < defaultSampleLimit) {
         const data = buildCopilotSampleData(category, name, args);
         const argsStr = Object.keys(args).length > 0 ? JSON.stringify(args).slice(0, 100) : '';
         entry.samples.push({

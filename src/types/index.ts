@@ -152,6 +152,20 @@ export interface McpSampleData {
   result?: string;
 }
 
+export interface ReasoningSampleData {
+  category: 'reasoning';
+  /** Full tool name (e.g. "mcp__crash-think-tool__crash"). */
+  toolName: string;
+  /** Reasoning step number, if available. */
+  stepNumber?: number;
+  /** The thought/reasoning text, truncated per config. */
+  thought?: string;
+  /** Expected or actual outcome. */
+  outcome?: string;
+  /** Planned next action (string or stringified object). */
+  nextAction?: string;
+}
+
 /**
  * Discriminated union of all structured tool sample types.
  * The `category` field is the discriminant — use `switch(data.category)` for narrowing.
@@ -167,7 +181,8 @@ export type StructuredToolSample =
   | FetchSampleData
   | TaskSampleData
   | AskSampleData
-  | McpSampleData;
+  | McpSampleData
+  | ReasoningSampleData;
 
 /** One-line concise summary of a single tool invocation */
 export interface ToolSample {
@@ -189,6 +204,28 @@ export interface ToolUsageSummary {
   samples: ToolSample[];
 }
 
+/** Result from a subagent/task invocation */
+export interface SubagentResult {
+  taskId: string;
+  description: string;
+  status: 'completed' | 'killed' | 'error';
+  /** Final text output from the subagent */
+  result?: string;
+  /** How many tools the subagent used */
+  toolCallCount: number;
+}
+
+/** A single reasoning/thinking step captured during the session */
+export interface ReasoningStep {
+  stepNumber: number;
+  totalSteps: number;
+  /** Purpose category: 'analysis', 'decision', etc. */
+  purpose: string;
+  thought: string;
+  outcome: string;
+  nextAction: string;
+}
+
 /** Contextual session notes (reasoning highlights, token usage) */
 export interface SessionNotes {
   /** Model used in the session (kept for backwards compatibility with parsers that set it here) */
@@ -205,6 +242,12 @@ export interface SessionNotes {
   activeTimeMs?: number;
   /** Narrative summary from compact/compaction messages */
   compactSummary?: string;
+  /** Results from subagent/task invocations */
+  subagentResults?: SubagentResult[];
+  /** Sequential reasoning/thinking steps captured during the session */
+  reasoningSteps?: ReasoningStep[];
+  /** External tool results (MCP, plugins) with size and preview */
+  externalToolResults?: Array<{ name: string; sizeBytes: number; preview: string }>;
 }
 
 /** Extracted context for cross-tool continuation */

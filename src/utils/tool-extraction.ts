@@ -10,6 +10,7 @@ import type {
   GrepSampleData,
   McpSampleData,
   ReadSampleData,
+  ReasoningSampleData,
   SearchSampleData,
   ShellSampleData,
   StructuredToolSample,
@@ -17,6 +18,8 @@ import type {
   ToolUsageSummary,
   WriteSampleData,
 } from '../types/index.js';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 import {
   ASK_TOOLS,
   EDIT_TOOLS,
@@ -75,9 +78,6 @@ interface ToolResultEntry {
   isError: boolean;
 }
 
-/** Max chars to store per tool result (generous for stdout/diffs) */
-const MAX_RESULT_CHARS = 4000;
-
 /**
  * Extract tool usage summaries and files modified from Anthropic-style messages.
  *
@@ -88,12 +88,25 @@ const MAX_RESULT_CHARS = 4000;
  * 1. Collect all tool_result outputs by tool_use_id (with generous char limits)
  * 2. Process tool_use blocks with matched results, constructing structured data
  */
-export function extractAnthropicToolData(messages: AnthropicMessage[]): {
+export function extractAnthropicToolData(
+  messages: AnthropicMessage[],
+  config: VerbosityConfig = getPreset('standard'),
+): {
   summaries: ToolUsageSummary[];
   filesModified: string[];
 } {
   const collector = new SummaryCollector();
   const toolResultMap = new Map<string, ToolResultEntry>();
+
+  // Generous first-pass limit — category-specific limits are applied in the second pass
+  const firstPassMaxChars = Math.max(
+    config.shell.maxChars,
+    config.write.maxChars,
+    config.edit.maxChars,
+    config.mcp.resultChars,
+    config.task.subagentResultChars,
+    config.mcp.thinkingTools.maxReasoningChars,
+  );
 
   // First pass: collect all tool_result blocks (generous limits for rich extraction)
   for (const msg of messages) {
@@ -111,7 +124,7 @@ export function extractAnthropicToolData(messages: AnthropicMessage[]): {
       }
       if (text) {
         toolResultMap.set(tr.tool_use_id, {
-          text: text.slice(0, MAX_RESULT_CHARS),
+          text: text.slice(0, firstPassMaxChars),
           isError: tr.is_error === true,
         });
       }
@@ -137,9 +150,9 @@ export function extractAnthropicToolData(messages: AnthropicMessage[]): {
         const cmd = (input.command as string) || (input.cmd as string) || '';
         const exitCode = extractExitCode(result);
         const errored = isError || (exitCode !== undefined && exitCode !== 0);
-        const stdoutTail = result ? extractStdoutTail(result, 5) : undefined;
+        const stdoutTail = result ? extractStdoutTail(result, config.shell.stdoutLines) : undefined;
 
-        const errorMessage = errored && result ? result.slice(0, 200) : undefined;
+        const errorMessage = errored && result ? result.slice(0, config.shell.maxChars) : undefined;
         const data: ShellSampleData = {
           category: 'shell',
           command: cmd,
@@ -182,7 +195,7 @@ export function extractAnthropicToolData(messages: AnthropicMessage[]): {
           diffStats = countDiffStats(diff);
         }
 
-        const writeErrorMsg = isError && result ? result.slice(0, 200) : undefined;
+        const writeErrorMsg = isError && result ? result.slice(0, config.write.maxChars) : undefined;
         const data: WriteSampleData = {
           category: 'write',
           filePath: fp,
@@ -209,7 +222,7 @@ export function extractAnthropicToolData(messages: AnthropicMessage[]): {
           diffStats = countDiffStats(diff);
         }
 
-        const editErrorMsg = isError && result ? result.slice(0, 200) : undefined;
+        const editErrorMsg = isError && result ? result.slice(0, config.edit.maxChars) : undefined;
         const data: EditSampleData = {
           category: 'edit',
           filePath: fp,
@@ -289,24 +302,49 @@ export function extractAnthropicToolData(messages: AnthropicMessage[]): {
         const data: AskSampleData = { category: 'ask', question };
         collector.add('AskUserQuestion', `ask: "${question}"`, { data });
       } else if (name.startsWith('mcp__') || name.includes('___') || name.includes('-')) {
-        const params = truncateParams(input);
-        const data: McpSampleData = {
-          category: 'mcp',
-          toolName: name,
-          ...(params ? { params } : {}),
-          ...(result ? { result: result.slice(0, 100) } : {}),
-        };
-        collector.add(name, mcpSummary(name, JSON.stringify(input).slice(0, 100), result?.slice(0, 80)), { data });
+        // MCP tools — check for thinking/reasoning tools first
+        if (config.mcp.thinkingTools.extractReasoning && isThinkingTool(name)) {
+          const maxChars = config.mcp.thinkingTools.maxReasoningChars;
+          const thought = truncate((input.thought as string) || '', maxChars);
+          const outcome = truncate((input.outcome as string) || '', maxChars);
+          const rawNextAction = input.next_action;
+          const nextAction = typeof rawNextAction === 'string'
+            ? truncate(rawNextAction, maxChars)
+            : rawNextAction
+              ? truncate(JSON.stringify(rawNextAction), maxChars)
+              : undefined;
+          const stepNumber = typeof input.step_number === 'number' ? input.step_number : undefined;
+
+          const data: ReasoningSampleData = {
+            category: 'reasoning',
+            toolName: name,
+            ...(stepNumber !== undefined ? { stepNumber } : {}),
+            ...(thought ? { thought } : {}),
+            ...(outcome ? { outcome } : {}),
+            ...(nextAction ? { nextAction } : {}),
+          };
+          const label = `reasoning step${stepNumber ? ` #${stepNumber}` : ''}: ${truncate(thought || outcome || 'thinking', 60)}`;
+          collector.add(name, label, { data });
+        } else {
+          const params = truncateParams(input, config.mcp.paramChars);
+          const data: McpSampleData = {
+            category: 'mcp',
+            toolName: name,
+            ...(params ? { params } : {}),
+            ...(result ? { result: result.slice(0, config.mcp.resultChars) } : {}),
+          };
+          collector.add(name, mcpSummary(name, JSON.stringify(input).slice(0, config.mcp.paramChars), result?.slice(0, 80)), { data });
+        }
       } else {
         // Generic/unknown tool — treat as MCP-like
-        const params = truncateParams(input);
+        const params = truncateParams(input, config.mcp.paramChars);
         const data: McpSampleData = {
           category: 'mcp',
           toolName: name,
           ...(params ? { params } : {}),
-          ...(result ? { result: result.slice(0, 100) } : {}),
+          ...(result ? { result: result.slice(0, config.mcp.resultChars) } : {}),
         };
-        collector.add(name, withResult(`${name}(${JSON.stringify(input).slice(0, 100)})`, result?.slice(0, 80)), {
+        collector.add(name, withResult(`${name}(${JSON.stringify(input).slice(0, config.mcp.paramChars)})`, result?.slice(0, 80)), {
           data,
         });
       }
@@ -318,12 +356,17 @@ export function extractAnthropicToolData(messages: AnthropicMessage[]): {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Truncate each param value to 100 chars and format as compact string */
-function truncateParams(input: Record<string, unknown>): string {
+/** Check if a tool name indicates a thinking/reasoning tool */
+export function isThinkingTool(name: string): boolean {
+  return name.toLowerCase().includes('think');
+}
+
+/** Truncate each param value to maxChars and format as compact string */
+function truncateParams(input: Record<string, unknown>, maxChars = 100): string {
   const parts: string[] = [];
   for (const [key, val] of Object.entries(input)) {
     const str = typeof val === 'string' ? val : JSON.stringify(val) ?? '';
-    parts.push(`${key}=${truncate(str, 100)}`);
+    parts.push(`${key}=${truncate(str, maxChars)}`);
   }
   return parts.join(', ');
 }
@@ -348,18 +391,23 @@ function parseFileCount(result: string): number | undefined {
 
 /**
  * Extract thinking/reasoning highlights from Anthropic-style messages.
- * Returns up to `maxHighlights` first-line summaries from thinking blocks.
+ * Returns up to `limit` first-line summaries from thinking blocks.
  * Shared by Claude, Droid, and Cursor parsers.
  */
-export function extractThinkingHighlights(messages: AnthropicMessage[], maxHighlights = 5): string[] {
+export function extractThinkingHighlights(
+  messages: AnthropicMessage[],
+  maxHighlights?: number,
+  config: VerbosityConfig = getPreset('standard'),
+): string[] {
+  const limit = maxHighlights ?? config.thinking.maxHighlights;
   const reasoning: string[] = [];
 
   for (const msg of messages) {
-    if (reasoning.length >= maxHighlights) break;
+    if (reasoning.length >= limit) break;
     if (!Array.isArray(msg.content)) continue;
 
     for (const item of msg.content) {
-      if (reasoning.length >= maxHighlights) break;
+      if (reasoning.length >= limit) break;
       if (item.type !== 'thinking') continue;
 
       const text = (item as { thinking?: string; text?: string }).thinking || (item as { text?: string }).text || '';

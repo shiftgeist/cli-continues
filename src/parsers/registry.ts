@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import type { SessionContext, SessionSource, UnifiedSession } from '../types/index.js';
+import type { VerbosityConfig } from '../config/index.js';
 import { TOOL_NAMES } from '../types/tool-names.js';
 import {
   type FlagOccurrence,
@@ -34,7 +35,7 @@ export interface ToolAdapter {
   /** Discover and index all sessions */
   parseSessions: () => Promise<UnifiedSession[]>;
   /** Extract full context for cross-tool handoff */
-  extractContext: (session: UnifiedSession) => Promise<SessionContext>;
+  extractContext: (session: UnifiedSession, config?: VerbosityConfig) => Promise<SessionContext>;
   /** CLI args to resume a session natively */
   nativeResumeArgs: (session: UnifiedSession) => string[];
   /** CLI args to start with a handoff prompt */

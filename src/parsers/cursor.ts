@@ -9,6 +9,8 @@ import { readJsonlFile, scanJsonlHead } from '../utils/jsonl.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { cleanSummary, extractRepoFromCwd, homeDir } from '../utils/parser-helpers.js';
 import { cwdFromSlug } from '../utils/slug.js';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 import {
   type AnthropicMessage,
   extractAnthropicToolData,
@@ -134,7 +136,8 @@ export async function parseCursorSessions(): Promise<UnifiedSession[]> {
 /**
  * Extract context from a Cursor session for cross-tool continuation
  */
-export async function extractCursorContext(session: UnifiedSession): Promise<SessionContext> {
+export async function extractCursorContext(session: UnifiedSession, config?: VerbosityConfig): Promise<SessionContext> {
+  const resolvedConfig = config ?? getPreset('standard');
   const lines = await readJsonlFile<CursorTranscriptLine>(session.originalPath);
   const recentMessages: ConversationMessage[] = [];
 
@@ -144,7 +147,7 @@ export async function extractCursorContext(session: UnifiedSession): Promise<Ses
     content: l.message.content,
   }));
 
-  const { summaries: toolSummaries, filesModified } = extractAnthropicToolData(anthropicMsgs);
+  const { summaries: toolSummaries, filesModified } = extractAnthropicToolData(anthropicMsgs, resolvedConfig);
 
   // Extract session notes (thinking highlights)
   const sessionNotes: SessionNotes = {};
@@ -172,7 +175,7 @@ export async function extractCursorContext(session: UnifiedSession): Promise<Ses
     });
   }
 
-  const trimmed = recentMessages.slice(-10);
+  const trimmed = recentMessages.slice(-resolvedConfig.recentMessages);
 
   const markdown = generateHandoffMarkdown(session, trimmed, filesModified, pendingTasks, toolSummaries, sessionNotes);
 

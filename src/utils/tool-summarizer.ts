@@ -4,6 +4,8 @@
  * for consistent, concise summaries across all 7 CLIs.
  */
 import type { StructuredToolSample, ToolSample, ToolUsageSummary } from '../types/index.js';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 
 // ── Formatting Helpers ──────────────────────────────────────────────────────
 
@@ -89,24 +91,33 @@ export function subagentSummary(desc: string, type?: string): string {
 
 // ── SummaryCollector ────────────────────────────────────────────────────────
 
-/** Per-category sample limits — captures enough for rich rendering without bloat */
-const CATEGORY_SAMPLE_LIMITS: Record<string, number> = {
-  Bash: 8,
-  shell: 8,
-  Write: 5,
-  write: 5,
-  Edit: 5,
-  edit: 5,
-  Read: 20,
-  read: 20,
-  Grep: 10,
-  Glob: 10,
-  WebSearch: 10,
-  WebFetch: 10,
-  Task: 5,
-  TaskOutput: 5,
-  AskUserQuestion: 5,
-};
+/** Build per-category sample limits from a VerbosityConfig */
+function buildCategoryLimits(config: VerbosityConfig): Record<string, number> {
+  return {
+    // shell / bash
+    Bash: config.shell.maxSamples,
+    shell: config.shell.maxSamples,
+    // write / create
+    Write: config.write.maxSamples,
+    write: config.write.maxSamples,
+    // edit / patch
+    Edit: config.edit.maxSamples,
+    edit: config.edit.maxSamples,
+    // read
+    Read: config.read.maxSamples,
+    read: config.read.maxSamples,
+    // grep / glob / search / fetch
+    Grep: config.grep.maxSamples,
+    Glob: config.grep.maxSamples,
+    WebSearch: config.grep.maxSamples,
+    WebFetch: config.grep.maxSamples,
+    // mcp / task / ask
+    Task: config.mcp.maxSamplesPerNamespace,
+    TaskOutput: config.mcp.maxSamplesPerNamespace,
+    AskUserQuestion: config.mcp.maxSamplesPerNamespace,
+  };
+}
+
 const DEFAULT_SAMPLE_LIMIT = 5;
 
 /** Options for SummaryCollector.add() */
@@ -129,6 +140,12 @@ export interface AddSampleOptions {
 export class SummaryCollector {
   private data = new Map<string, { count: number; errorCount: number; samples: ToolSample[] }>();
   private files = new Set<string>();
+  private categoryLimits: Record<string, number>;
+
+  constructor(config?: VerbosityConfig) {
+    const resolved = config ?? getPreset('standard');
+    this.categoryLimits = buildCategoryLimits(resolved);
+  }
 
   /** Add a tool invocation. Optionally tracks file modification and errors. */
   add(category: string, summary: string, opts?: AddSampleOptions): void {
@@ -139,7 +156,7 @@ export class SummaryCollector {
     entry.count++;
     if (opts?.isError) entry.errorCount++;
 
-    const maxSamples = CATEGORY_SAMPLE_LIMITS[category] ?? DEFAULT_SAMPLE_LIMIT;
+    const maxSamples = this.categoryLimits[category] ?? DEFAULT_SAMPLE_LIMIT;
     if (entry.samples.length < maxSamples) {
       const sample: ToolSample = { summary };
       if (opts?.data) sample.data = opts.data;

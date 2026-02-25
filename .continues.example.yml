@@ -1,0 +1,107 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .continues.yml — Verbosity configuration for the `continues` CLI
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Copy this file to one of:
+#   .continues.yml          (in your project root — per-project settings)
+#   ~/.continues/config.yml (in your home dir — global default)
+#
+# Or pass explicitly: continues resume <id> --config path/to/config.yml
+#
+# You only need to include the fields you want to change.
+# Everything else inherits from the selected preset.
+#
+# Available presets:
+#   minimal  — ~2KB output, essentials only
+#   standard — ~8KB output, good default (this file shows standard values)
+#   verbose  — ~30KB output, rich context for complex tasks
+#   full     — ~unlimited, complete session data
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Base preset — all unspecified fields inherit from this preset
+preset: standard
+
+# How many recent conversation messages to include in the handoff
+recentMessages: 10
+
+# Truncate individual message content after this many characters
+maxMessageChars: 500
+
+# ── Shell commands (bash, terminal, exec) ────────────────────────────────────
+shell:
+  maxSamples: 8          # Number of shell invocations to show in detail
+  stdoutLines: 5         # Lines of stdout to include per command
+  stderrLines: 5         # Lines of stderr to include per command
+  maxChars: 2000         # Max characters per shell result block
+  showCommand: true      # Show the command that was run
+  showExitCode: true     # Show the exit code
+
+# ── File reads ───────────────────────────────────────────────────────────────
+read:
+  maxSamples: 20         # Number of file reads to list
+  maxChars: 0            # Max chars of file content to show (0 = path only)
+  showLineRange: true    # Show line range when available (e.g. "lines 10-50")
+
+# ── File writes (new files) ──────────────────────────────────────────────────
+write:
+  maxSamples: 5          # Number of writes to show in detail
+  diffLines: 200         # Max diff lines per write
+  maxChars: 5000         # Max characters for the whole write block
+
+# ── File edits (modifications) ───────────────────────────────────────────────
+edit:
+  maxSamples: 5          # Number of edits to show in detail
+  diffLines: 200         # Max diff lines per edit
+  maxChars: 5000         # Max characters for the whole edit block
+
+# ── Grep / search results ───────────────────────────────────────────────────
+grep:
+  maxSamples: 10         # Number of grep/search invocations to show
+  maxChars: 500          # Max chars per grep result
+  showPattern: true      # Show the search pattern
+  matchLines: 5          # Number of matching lines to include
+
+# ── MCP tool calls ──────────────────────────────────────────────────────────
+mcp:
+  maxSamplesPerNamespace: 5   # Max samples per MCP namespace
+  paramChars: 100             # Truncate MCP call parameters after N chars
+  resultChars: 100            # Truncate MCP call results after N chars
+  thinkingTools:
+    extractReasoning: true    # Extract reasoning from thinking-style MCP tools
+    maxReasoningChars: 500    # Max chars of extracted reasoning
+
+# ── Subagent / task dispatches ───────────────────────────────────────────────
+task:
+  maxSamples: 5               # Number of task dispatches to show
+  includeSubagentResults: true  # Include results from subagent completions
+  subagentResultChars: 500    # Max chars per subagent result
+  recurseSubagents: false     # Recursively expand nested subagent chains
+
+# ── Thinking / reasoning blocks ──────────────────────────────────────────────
+thinking:
+  include: true          # Include thinking/reasoning blocks
+  maxChars: 1000         # Max chars of thinking content
+  maxHighlights: 5       # Max number of reasoning highlights to extract
+
+# ── Compact summary ─────────────────────────────────────────────────────────
+compactSummary:
+  maxChars: 500          # Max chars for the compact summary section
+
+# ── Pending tasks extraction ────────────────────────────────────────────────
+pendingTasks:
+  extractFromThinking: true     # Extract pending tasks from thinking blocks
+  extractFromSubagents: true    # Extract pending tasks from subagent outputs
+  maxTasks: 10                  # Max number of pending tasks to include
+
+# ── Per-agent feature flags ─────────────────────────────────────────────────
+agents:
+  claude:
+    filterProgressEvents: true           # Filter out progress/heartbeat events
+    parseSubagents: true                 # Parse subagent dispatches
+    parseToolResultsDir: true            # Parse tool_results directory data
+    separateHumanFromToolResults: true   # Separate human messages from tool results
+  # Add flags for other agents as needed:
+  # codex:
+  #   someFlag: true
+  # gemini:
+  #   someFlag: true

@@ -21,6 +21,8 @@ import {
 import { findFiles, listSubdirectories } from '../utils/fs-helpers.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { extractRepoFromCwd, homeDir } from '../utils/parser-helpers.js';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 
 const OPENCODE_BASE_DIR = path.join(homeDir(), '.local', 'share', 'opencode');
 const OPENCODE_STORAGE_DIR = path.join(OPENCODE_BASE_DIR, 'storage');
@@ -494,17 +496,20 @@ function extractOpenCodeToolSummaries(sessionId: string): ToolUsageSummary[] {
 /**
  * Extract context from an OpenCode session for cross-tool continuation
  */
-export async function extractOpenCodeContext(session: UnifiedSession): Promise<SessionContext> {
+export async function extractOpenCodeContext(session: UnifiedSession, config?: VerbosityConfig): Promise<SessionContext> {
+  const resolvedConfig = config ?? getPreset('standard');
   const recentMessages = readAllMessages(session.id);
   const filesModified: string[] = [];
   const pendingTasks: string[] = [];
   const toolSummaries = extractOpenCodeToolSummaries(session.id);
 
-  const markdown = generateHandoffMarkdown(session, recentMessages.slice(-10), filesModified, pendingTasks, toolSummaries);
+  const trimmed = recentMessages.slice(-resolvedConfig.recentMessages);
+
+  const markdown = generateHandoffMarkdown(session, trimmed, filesModified, pendingTasks, toolSummaries);
 
   return {
     session,
-    recentMessages: recentMessages.slice(-10),
+    recentMessages: trimmed,
     filesModified,
     pendingTasks,
     toolSummaries,
