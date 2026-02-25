@@ -95,7 +95,7 @@ export function extractAnthropicToolData(
   summaries: ToolUsageSummary[];
   filesModified: string[];
 } {
-  const collector = new SummaryCollector();
+  const collector = new SummaryCollector(config);
   const toolResultMap = new Map<string, ToolResultEntry>();
 
   // Generous first-pass limit — category-specific limits are applied in the second pass
