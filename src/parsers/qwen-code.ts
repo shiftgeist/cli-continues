@@ -22,10 +22,73 @@ const qwenHome = process.env.QWEN_HOME || homeDir();
 // sanitizeCwd replaces all non-alphanumeric chars with '-'
 const QWEN_PROJECTS_DIR = path.join(qwenHome, '.qwen', 'projects');
 
+// -- ChatRecord types ---------------------------------------------------------
+
+interface QwenPart {
+  text?: string;
+  thought?: boolean;
+  functionCall?: { name: string; args: Record<string, unknown> };
+  functionResponse?: { name: string; response: { output?: string; status?: string } };
+}
+
+interface QwenContent {
+  role?: string;
+  parts?: QwenPart[];
+}
+
+interface QwenToolCallResult {
+  displayName?: string;
+  status?: string;
+  resultDisplay?: string | QwenFileDiff | QwenTodoResult;
+}
+
+interface QwenFileDiff {
+  fileName?: string;
+  fileDiff?: string;
+  originalContent?: string | null;
+  diffStat?: { model_added_lines?: number; model_removed_lines?: number };
+  type?: string;
+}
+
+interface QwenTodoResult {
+  type?: string;
+  todos?: unknown[];
+}
+
+interface QwenUsageMetadata {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+  cachedContentTokenCount?: number;
+  thoughtsTokenCount?: number;
+}
+
+interface QwenSystemPayload {
+  type?: string;
+  summary?: string;
+}
+
+interface QwenChatRecord {
+  uuid: string;
+  parentUuid: string | null;
+  sessionId: string;
+  timestamp: string;
+  type: 'user' | 'assistant' | 'tool_result' | 'system';
+  subtype?: 'chat_compression' | 'slash_command' | 'ui_telemetry' | 'at_command';
+  cwd: string;
+  version?: string;
+  gitBranch?: string;
+  message?: QwenContent;
+  usageMetadata?: QwenUsageMetadata;
+  model?: string;
+  toolCallResult?: QwenToolCallResult;
+  systemPayload?: QwenSystemPayload;
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Type guard: is resultDisplay a FileDiff object (not a string)? */
-function isFileDiff(rd: QwenChatRecord['toolCallResult'] extends { resultDisplay?: infer R } ? R : never): rd is QwenFileDiff {
+/** Type guard: is resultDisplay a FileDiff object (not a string or todo)? */
+function isFileDiff(rd: string | QwenFileDiff | QwenTodoResult | undefined): rd is QwenFileDiff {
   if (!rd || typeof rd === 'string') return false;
   return 'fileName' in rd || 'fileDiff' in rd;
 }
@@ -168,7 +231,7 @@ function extractToolData(
   for (const record of records) {
     // Extract from functionCall parts in assistant messages
     if (record.type === 'assistant' && record.message?.parts) {
-      const hasFunctionCalls = record.message.parts.some((p) => p.functionCall);
+      const hasFunctionCalls = record.message.parts.some((p: QwenPart) => p.functionCall);
       if (hasFunctionCalls) processedCallUuids.add(record.uuid);
       for (const part of record.message.parts) {
         if (!part.functionCall) continue;
@@ -187,7 +250,7 @@ function extractToolData(
           }
         }
         const isResponseError = record.message.parts.some(
-          (rp) => rp.functionResponse?.name === name && rp.functionResponse.response?.status === 'error',
+          (rp: QwenPart) => rp.functionResponse?.name === name && rp.functionResponse.response?.status === 'error',
         );
 
         switch (category) {
@@ -290,7 +353,7 @@ function extractToolData(
       }
     }
 
-    // Extract from tool_result records with enriched metadata (skip if parent already processed via functionCall)
+    // Extract from tool_result records (skip if parent already processed via functionCall)
     if (record.type === 'tool_result' && record.toolCallResult) {
       if (record.parentUuid && processedCallUuids.has(record.parentUuid)) continue;
       const tcr = record.toolCallResult;
@@ -382,7 +445,6 @@ function extractSessionNotes(records: QwenChatRecord[]): SessionNotes {
 function reconstructMainPath(records: QwenChatRecord[]): QwenChatRecord[] {
   if (records.length === 0) return [];
 
-  // Build parent→children map and uuid→record map
   const byUuid = new Map<string, QwenChatRecord>();
   const parentUuids = new Set<string>();
 
@@ -392,7 +454,7 @@ function reconstructMainPath(records: QwenChatRecord[]): QwenChatRecord[] {
   }
 
   // Find the latest leaf (record with no children, latest timestamp)
-  let latestLeaf = records[records.length - 1]; // fallback
+  let latestLeaf = records[records.length - 1];
   let latestTime = 0;
   for (const r of records) {
     if (!parentUuids.has(r.uuid)) {
