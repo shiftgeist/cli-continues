@@ -508,7 +508,7 @@ export const KimiMetadataSchema = z
 export const KimiMessageSchema = z
   .object({
     role: z.string(),
-    content: z.union([z.string(), z.array(z.object({ type: z.string(), text: z.string().optional() }).passthrough())]),
+    content: z.union([z.string(), z.array(z.object({ type: z.string(), text: z.string().optional() }).passthrough())]).optional(),
     tool_calls: z
       .array(
         z
