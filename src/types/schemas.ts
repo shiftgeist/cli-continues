@@ -492,6 +492,45 @@ export type DroidCompactionState = z.infer<typeof DroidCompactionStateSchema>;
 export type DroidEvent = z.infer<typeof DroidEventSchema>;
 export type DroidSettings = z.infer<typeof DroidSettingsSchema>;
 
+// ── Kimi ────────────────────────────────────────────────────────────────────
+
+export const KimiMetadataSchema = z
+  .object({
+    session_id: z.string(),
+    title: z.string().optional(),
+    title_generated: z.boolean().optional(),
+    archived: z.boolean().optional(),
+    archived_at: z.union([z.number(), z.string(), z.null()]).optional(),
+    wire_mtime: z.number().nullable().optional(),
+  })
+  .passthrough();
+
+export const KimiMessageSchema = z
+  .object({
+    role: z.string(),
+    content: z.union([z.string(), z.array(z.object({ type: z.string(), text: z.string().optional() }).passthrough())]).optional(),
+    tool_calls: z
+      .array(
+        z
+          .object({
+            type: z.literal('function'),
+            id: z.string(),
+            function: z.object({
+              name: z.string(),
+              arguments: z.string(),
+            }),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    tool_call_id: z.string().optional(),
+    id: z.number().optional(),
+  })
+  .passthrough();
+
+export type KimiMetadata = z.infer<typeof KimiMetadataSchema>;
+export type KimiMessage = z.infer<typeof KimiMessageSchema>;
+
 // ── Cursor ──────────────────────────────────────────────────────────────────
 
 export const CursorTranscriptLineSchema = z
