@@ -54,6 +54,11 @@ export async function dumpCommand(
 
     // Apply limit
     const limit = options.limit ? parseInt(options.limit, 10) : undefined;
+    if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
+      console.error(chalk.red('--limit must be a positive integer'));
+      process.exitCode = 1;
+      return;
+    }
     if (limit && limit > 0) {
       sessions = sessions.slice(0, limit);
     }
@@ -145,6 +150,7 @@ export async function dumpCommand(
       process.exitCode = 1;
     }
   } catch (error) {
+    spinner?.stop();
     console.error(chalk.red('Error:'), (error as Error).message);
     process.exitCode = 1;
   }
