@@ -1,0 +1,43 @@
+{
+  "files": [
+    {
+      "path": "CLAUDE.md",
+      "description": "Primary architecture guide. Contains the core flow diagram, module boundaries, adapter registry pattern, parser contract, and the 4-step process for adding new platforms. Read before reviewing any PR."
+    },
+    {
+      "path": "src/types/index.ts",
+      "description": "Core type definitions — UnifiedSession, ConversationMessage, ToolCall, ToolUsageSummary, SessionContext, HandoffOptions, and the StructuredToolSample discriminated union. Validate that PRs keep types consistent with these definitions.",
+      "scope": ["src/**/*.ts"]
+    },
+    {
+      "path": "src/types/tool-names.ts",
+      "description": "TOOL_NAMES frozen array (single source of truth for supported tools), SessionSource type derivation, and canonical tool name sets (SHELL_TOOLS, READ_TOOLS, etc.) used by classifyToolName(). New tools must be added here first.",
+      "scope": ["src/types/**/*.ts", "src/parsers/**/*.ts"]
+    },
+    {
+      "path": "src/types/schemas.ts",
+      "description": "Zod schemas for all parser raw data formats — Claude, Codex, Copilot, Gemini, OpenCode, Droid, Cursor, and the serialized session index. All schemas use .passthrough() for forward compatibility.",
+      "scope": ["src/parsers/**/*.ts", "src/types/**/*.ts"]
+    },
+    {
+      "path": "src/parsers/registry.ts",
+      "description": "Central adapter registry, ToolAdapter interface, and forward-flag mappers. All tool-specific behavior derives from this file. Has a completeness assertion that throws if TOOL_NAMES and registry are out of sync.",
+      "scope": ["src/parsers/**/*.ts", "src/commands/**/*.ts", "src/utils/**/*.ts"]
+    },
+    {
+      "path": "src/errors.ts",
+      "description": "Typed error hierarchy (ContinuesError base + 6 subclasses: ParseError, SessionNotFoundError, ToolNotAvailableError, UnknownSourceError, IndexError, StorageError). Verify PRs use these instead of raw Error objects.",
+      "scope": ["src/**/*.ts"]
+    },
+    {
+      "path": "src/__tests__/fixtures/index.ts",
+      "description": "Fixture factories for all parsers. When reviewing new parser PRs, verify a matching fixture factory exists here with realistic session data.",
+      "scope": ["src/__tests__/**/*.ts", "src/parsers/**/*.ts"]
+    },
+    {
+      "path": ".continues.example.yml",
+      "description": "Configuration reference showing all verbosity presets and per-tool settings (shell, read, write, edit, grep, mcp, task, thinking). Useful context when reviewing config-related changes.",
+      "scope": ["src/config/**/*.ts"]
+    }
+  ]
+}

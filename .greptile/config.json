@@ -1,0 +1,129 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax"],
+  "triggerOnUpdates": false,
+  "fixWithAI": true,
+  "statusCheck": true,
+  "includeConfidenceScore": true,
+  "includeSequenceDiagram": false,
+  "summarySection": { "included": true, "collapsible": false, "defaultOpen": true },
+  "issuesTableSection": { "included": true, "collapsible": true, "defaultOpen": true },
+  "confidenceScoreSection": { "included": true, "collapsible": true, "defaultOpen": false },
+  "ignorePatterns": "dist/**\nnode_modules/**\n*.d.ts\npnpm-lock.yaml\npackage-lock.json\n*.tgz\ntest-fixtures/**\n**/__snapshots__/**\n*.generated.*\n.claude/**\n.windsurf/**\n.agents/**\n.github/**\nCHANGELOG.md\nskills-lock.json\ndemo.mp4",
+  "rules": [
+    {
+      "id": "registry-single-source-of-truth",
+      "rule": "All tool-specific behavior (CLI commands, resume logic, session discovery, color coding) must be derived from the adapter registry in src/parsers/registry.ts. No switch statements, hardcoded tool arrays, or if-else chains that enumerate SessionSource values outside the registry. If you see a new tool name added anywhere other than the registry's register() call, flag it.",
+      "scope": ["src/commands/**/*.ts", "src/utils/**/*.ts", "src/cli.ts"],
+      "severity": "high"
+    },
+    {
+      "id": "tool-names-source-of-truth",
+      "rule": "New tools must be added to the TOOL_NAMES array in src/types/tool-names.ts FIRST. This frozen array is the single source of truth from which the SessionSource union type is derived. The registry completeness assertion in registry.ts will throw at module load if a tool is in TOOL_NAMES but not registered. Never define SessionSource manually or add tools only to the registry without updating TOOL_NAMES.",
+      "scope": ["src/types/tool-names.ts", "src/types/index.ts", "src/parsers/registry.ts"],
+      "severity": "high"
+    },
+    {
+      "id": "parser-isolation",
+      "rule": "Parser files (src/parsers/*.ts, excluding registry.ts and index.ts) must not import from other parser files. Each parser is independent. Cross-parser shared logic belongs in src/utils/parser-helpers.ts, src/utils/tool-summarizer.ts, or src/utils/tool-extraction.ts.",
+      "scope": ["src/parsers/**/*.ts"],
+      "severity": "high"
+    },
+    {
+      "id": "esm-import-extensions",
+      "rule": "All local imports must use .js file extensions (e.g., import { foo } from './utils/bar.js'). This is an ESM-only project using NodeNext module resolution. Bare specifier imports without .js will fail at runtime even though TypeScript compilation succeeds.",
+      "scope": ["src/**/*.ts"],
+      "severity": "high"
+    },
+    {
+      "id": "session-data-read-only",
+      "rule": "Parsers must never write to, modify, or delete source session files. The tool's storage directories (~/.claude/, ~/.codex/, ~/.copilot/, etc.) are read-only. Only ~/.continues/ is writable for index cache and handoff files. Any fs.writeFile, fs.unlink, or fs.rename targeting a tool's storage path is a critical bug.",
+      "scope": ["src/parsers/**/*.ts"],
+      "severity": "high"
+    },
+    {
+      "id": "zod-schema-validation",
+      "rule": "All raw session data read from disk (JSONL lines, JSON files, SQLite rows, YAML) must be validated through a Zod schema from src/types/schemas.ts before use. Never cast raw JSON to a TypeScript type with 'as' — parse through the schema to catch malformed data early. All schemas must use .passthrough() to tolerate extra fields from future tool versions.",
+      "scope": ["src/parsers/**/*.ts", "src/types/schemas.ts"],
+      "severity": "high"
+    },
+    {
+      "id": "summary-collector-usage",
+      "rule": "All parsers must use SummaryCollector from src/utils/tool-summarizer.ts to accumulate tool activity and track modified files. Do not build ad-hoc summary strings or manually track file lists. Call collector.add(category, summary, filePath?, isWrite?) for each tool invocation found in session data.",
+      "scope": ["src/parsers/**/*.ts"],
+      "severity": "medium"
+    },
+    {
+      "id": "promise-allsettled-for-parsers",
+      "rule": "When calling multiple parsers in parallel (e.g., during session index building), use Promise.allSettled() — never Promise.all(). A single broken or missing parser must not crash the entire CLI. Each parser result should be checked for status === 'fulfilled' before use.",
+      "scope": ["src/utils/index.ts"],
+      "severity": "high"
+    },
+    {
+      "id": "typed-error-classes",
+      "rule": "Throw ContinuesError subclasses (ParseError, SessionNotFoundError, ToolNotAvailableError, UnknownSourceError, IndexError, StorageError) from src/errors.ts instead of raw Error objects. Each error class provides a machine-readable .name property for consistent error handling.",
+      "scope": ["src/commands/**/*.ts", "src/utils/**/*.ts", "src/parsers/**/*.ts"],
+      "severity": "medium"
+    },
+    {
+      "id": "no-process-exit",
+      "rule": "Do not call process.exit() directly. Set process.exitCode instead and let the event loop drain naturally. This ensures cleanup handlers and pending I/O complete before the process terminates.",
+      "scope": ["src/**/*.ts"],
+      "severity": "medium"
+    },
+    {
+      "id": "silent-parser-skip",
+      "rule": "When a parser encounters an unparseable or corrupted session file, it must catch the error silently (catch {}) and skip to the next file. Individual file failures must never propagate and crash the CLI or abort discovery of remaining sessions.",
+      "scope": ["src/parsers/**/*.ts"],
+      "severity": "high"
+    },
+    {
+      "id": "recent-messages-user-included",
+      "rule": "When trimming recentMessages for the handoff document, use the trimMessages() helper from src/utils/parser-helpers.ts which guarantees at least one user message is included. A handoff with only assistant messages loses critical context about what was requested.",
+      "scope": ["src/parsers/**/*.ts", "src/utils/markdown.ts"],
+      "severity": "medium"
+    },
+    {
+      "id": "new-parser-requires-registration",
+      "rule": "Adding a new AI tool parser requires exactly 4 changes: (1) add to TOOL_NAMES in src/types/tool-names.ts, (2) create src/parsers/<tool>.ts with parse and extract functions, (3) register in src/parsers/registry.ts with all ToolAdapter fields, (4) add tool name classification to the canonical sets in tool-names.ts if the tool introduces new tool call names. If a PR adds a parser file but is missing any of these, flag it as incomplete.",
+      "scope": ["src/parsers/**/*.ts", "src/types/tool-names.ts", "src/types/index.ts"],
+      "severity": "high"
+    },
+    {
+      "id": "new-parser-requires-tests",
+      "rule": "Every new parser must include: (1) a fixture factory in src/__tests__/fixtures/index.ts, (2) conversion test cases in src/__tests__/unit-conversions.test.ts covering all N-1 conversion paths in each direction. PRs adding parsers without test coverage must not be merged.",
+      "scope": ["src/parsers/**/*.ts", "src/__tests__/**/*.ts"],
+      "severity": "high"
+    },
+    {
+      "id": "no-experimental-warning-suppression-elsewhere",
+      "rule": "The node:sqlite ExperimentalWarning suppression must only exist at the top of src/cli.ts (the entry point). Do not add process.removeAllListeners or warning suppressions in parser files or utilities — it affects the entire process and belongs in exactly one place.",
+      "scope": ["src/**/*.ts"],
+      "severity": "low"
+    },
+    {
+      "id": "streaming-large-files",
+      "rule": "For JSONL and large session files, use readline.createInterface with a read stream — do not read entire files into memory with fs.readFile. Session files can be several MB. Look at claude.ts or codex.ts for the established streaming pattern.",
+      "scope": ["src/parsers/**/*.ts"],
+      "severity": "medium"
+    },
+    {
+      "id": "verbosity-config-passthrough",
+      "rule": "Parser extractContext functions that accept a VerbosityConfig parameter must forward it to generateHandoffMarkdown(). Do not call generateHandoffMarkdown without the config parameter — this silently falls back to the 'standard' preset and ignores user-configured verbosity from .continues.yml.",
+      "scope": ["src/parsers/**/*.ts"],
+      "severity": "medium"
+    },
+    {
+      "id": "forward-flag-canonical-keys",
+      "rule": "Forward-flag mappers in registry.ts must use the CanonicalFlagKey union type from src/utils/forward-flags.ts. Adding ad-hoc string keys to context.all() or context.latestString() without updating the CanonicalFlagKey type will cause TypeScript errors. New flag names must first be added to the union.",
+      "scope": ["src/parsers/registry.ts", "src/utils/forward-flags.ts"],
+      "severity": "medium"
+    },
+    {
+      "id": "tool-classification-sets",
+      "rule": "When a new tool alias appears (e.g., a new CLI names its bash tool 'run_command'), add it to the corresponding canonical set in src/types/tool-names.ts (SHELL_TOOLS, READ_TOOLS, WRITE_TOOLS, etc.). The classifyToolName() function and markdown renderer derive behavior from these sets — unlisted tool names silently fall through to the 'mcp' category, causing incorrect rendering in the handoff document.",
+      "scope": ["src/types/tool-names.ts", "src/parsers/**/*.ts"],
+      "severity": "medium"
+    }
+  ]
+}
