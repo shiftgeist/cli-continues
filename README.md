@@ -206,6 +206,8 @@ The handoff document includes a **Tool Activity** section so the target agent kn
 
 This works for all 14 tools — bash commands, file reads/writes/edits, grep/glob, MCP tool calls, thinking blocks, subagent dispatches, token usage, model info. The shared `SummaryCollector` keeps the format consistent regardless of source.
 
+Every handoff also includes the **full file path** of the original session, so the receiving tool can trace back to the raw data if needed.
+
 ## Commands reference
 
 | Command | What it does |

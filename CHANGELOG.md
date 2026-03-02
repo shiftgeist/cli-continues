@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [4.1.0] - 2026-03-02
+
+### Session Origin Tracking
+
+Handoff output now includes the full file path of the original session, so the receiving tool (or you) can trace back to exactly where the data came from.
+
+### Added
+
+- **Session file path in handoff markdown** — the Session Overview table now has a `Session File` row pointing to the original session file on disk
+- **Session Origin section** — new section at the bottom of every handoff document with source tool, file path, session ID, and project directory
+- **Session path in resume prompts** — both inline and reference prompts now reference the original session file path
+
+### Fixed
+
+- **`dump` spinner leak** — spinner now stops properly when session loading throws an error, instead of spinning forever
+- **`dump` --limit NaN guard** — passing invalid values like `--limit abc` now shows a clear error instead of silently doing nothing
+
+---
+
 ## [3.1.0] - 2026-02-22
 
 ### Smart Context Display
