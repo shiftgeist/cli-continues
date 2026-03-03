@@ -266,12 +266,98 @@ function mapClaudeFlags(context: ForwardFlagMapContext): ForwardMapResult {
   return { mappedArgs: args, warnings };
 }
 
-function mapDroidFlags(_context: ForwardFlagMapContext): ForwardMapResult {
-  return { mappedArgs: [] };
+function mapDroidFlags(context: ForwardFlagMapContext): ForwardMapResult {
+  const args: string[] = [];
+  const warnings: string[] = [];
+
+  const autoOccurrences = collectAutoApproveOccurrences(context);
+  const fullAutoOccurrences = context.all('fullAuto');
+  const askOccurrences = context.all('askForApproval');
+  const sandboxOccurrences = context.all('sandbox');
+  const approvalModeOccurrences = context.all('approvalMode');
+  const approvalMode = context.latestString('approvalMode')?.toLowerCase();
+  const askForApproval = context.latestString('askForApproval')?.toLowerCase();
+
+  if (
+    autoOccurrences.length > 0 ||
+    fullAutoOccurrences.length > 0 ||
+    askForApproval === 'never' ||
+    approvalMode === 'yolo'
+  ) {
+    context.consume(
+      ...autoOccurrences,
+      ...fullAutoOccurrences,
+      ...askOccurrences,
+      ...sandboxOccurrences,
+      ...approvalModeOccurrences,
+    );
+    args.push('--skip-permissions-unsafe');
+
+    if (askOccurrences.length > 0 && askForApproval && askForApproval !== 'never') {
+      warnings.push('Droid precedence: auto-approve mapping overrides unsupported ask-for-approval values.');
+    }
+
+    if (approvalModeOccurrences.length > 0 && approvalMode && approvalMode !== 'yolo') {
+      warnings.push('Droid: --approval-mode is not supported by droid exec and was ignored.');
+    }
+  } else if (askOccurrences.length > 0 || sandboxOccurrences.length > 0 || approvalModeOccurrences.length > 0) {
+    context.consume(...askOccurrences, ...sandboxOccurrences, ...approvalModeOccurrences);
+
+    if (askOccurrences.length > 0 || sandboxOccurrences.length > 0) {
+      warnings.push('Droid: --ask-for-approval and --sandbox are not supported by droid exec and were ignored.');
+    }
+
+    if (approvalModeOccurrences.length > 0 && approvalMode !== 'yolo') {
+      warnings.push('Droid: --approval-mode is not supported by droid exec and was ignored.');
+    }
+  }
+
+  const model = context.latestString('model');
+  if (model) {
+    context.consumeKeys('model');
+    args.push('--model', model);
+  }
+
+  const cwd = context.latestString('workspace', 'cd');
+  if (cwd) {
+    context.consumeKeys('workspace', 'cd');
+    args.push('--cwd', cwd);
+  }
+
+  return { mappedArgs: args, warnings };
 }
 
 function mapOpenCodeFlags(context: ForwardFlagMapContext): ForwardMapResult {
   const args: string[] = [];
+  const warnings: string[] = [];
+
+  const autoOccurrences = collectAutoApproveOccurrences(context);
+  const fullAutoOccurrences = context.all('fullAuto');
+  const askOccurrences = context.all('askForApproval');
+  const sandboxOccurrences = context.all('sandbox');
+  const approvalModeOccurrences = context.all('approvalMode');
+  const permissionModeOccurrences = context.all('permissionMode');
+
+  if (
+    autoOccurrences.length > 0 ||
+    fullAutoOccurrences.length > 0 ||
+    askOccurrences.length > 0 ||
+    sandboxOccurrences.length > 0 ||
+    approvalModeOccurrences.length > 0 ||
+    permissionModeOccurrences.length > 0
+  ) {
+    context.consume(
+      ...autoOccurrences,
+      ...fullAutoOccurrences,
+      ...askOccurrences,
+      ...sandboxOccurrences,
+      ...approvalModeOccurrences,
+      ...permissionModeOccurrences,
+    );
+    warnings.push(
+      'OpenCode: auto-approval, permission, and sandbox forwarding flags are not supported and were ignored.',
+    );
+  }
 
   const model = context.latestString('model');
   if (model) {
@@ -291,7 +377,56 @@ function mapOpenCodeFlags(context: ForwardFlagMapContext): ForwardMapResult {
     args.push('--log-level', logLevel);
   }
 
-  return { mappedArgs: args };
+  return { mappedArgs: args, warnings };
+}
+
+function mapAmpFlags(context: ForwardFlagMapContext): ForwardMapResult {
+  const args: string[] = [];
+  const warnings: string[] = [];
+
+  const autoOccurrences = collectAutoApproveOccurrences(context);
+  const fullAutoOccurrences = context.all('fullAuto');
+  const askOccurrences = context.all('askForApproval');
+  const sandboxOccurrences = context.all('sandbox');
+  const approvalModeOccurrences = context.all('approvalMode');
+  const approvalMode = context.latestString('approvalMode')?.toLowerCase();
+  const askForApproval = context.latestString('askForApproval')?.toLowerCase();
+
+  if (
+    autoOccurrences.length > 0 ||
+    fullAutoOccurrences.length > 0 ||
+    askForApproval === 'never' ||
+    approvalMode === 'yolo'
+  ) {
+    context.consume(
+      ...autoOccurrences,
+      ...fullAutoOccurrences,
+      ...askOccurrences,
+      ...sandboxOccurrences,
+      ...approvalModeOccurrences,
+    );
+    args.push('--dangerously-allow-all');
+
+    if (askOccurrences.length > 0 && askForApproval && askForApproval !== 'never') {
+      warnings.push('Amp precedence: auto-approve mapping overrides unsupported ask-for-approval values.');
+    }
+
+    if (approvalModeOccurrences.length > 0 && approvalMode && approvalMode !== 'yolo') {
+      warnings.push('Amp: --approval-mode is not supported and was ignored.');
+    }
+  } else if (askOccurrences.length > 0 || sandboxOccurrences.length > 0 || approvalModeOccurrences.length > 0) {
+    context.consume(...askOccurrences, ...sandboxOccurrences, ...approvalModeOccurrences);
+
+    if (askOccurrences.length > 0 || sandboxOccurrences.length > 0) {
+      warnings.push('Amp: --ask-for-approval and --sandbox are not supported and were ignored.');
+    }
+
+    if (approvalModeOccurrences.length > 0 && approvalMode) {
+      warnings.push('Amp: --approval-mode is not supported and was ignored.');
+    }
+  }
+
+  return { mappedArgs: args, warnings };
 }
 
 function mapCopilotFlags(context: ForwardFlagMapContext): ForwardMapResult {
@@ -349,8 +484,9 @@ function mapCursorAgentFlags(context: ForwardFlagMapContext): ForwardMapResult {
   const args: string[] = [];
 
   const autoOccurrences = collectAutoApproveOccurrences(context);
-  if (autoOccurrences.length > 0) {
-    context.consume(...autoOccurrences);
+  const fullAutoOccurrences = context.all('fullAuto');
+  if (autoOccurrences.length > 0 || fullAutoOccurrences.length > 0) {
+    context.consume(...autoOccurrences, ...fullAutoOccurrences);
     args.push('--yolo');
   }
 
@@ -386,6 +522,137 @@ function mapCursorAgentFlags(context: ForwardFlagMapContext): ForwardMapResult {
   }
 
   return { mappedArgs: args };
+}
+
+function mapKimiFlags(context: ForwardFlagMapContext): ForwardMapResult {
+  const args: string[] = [];
+  const warnings: string[] = [];
+
+  const autoOccurrences = collectAutoApproveOccurrences(context);
+  const fullAutoOccurrences = context.all('fullAuto');
+  const askOccurrences = context.all('askForApproval');
+  const sandboxOccurrences = context.all('sandbox');
+  const approvalMode = context.latestString('approvalMode')?.toLowerCase();
+  const askForApproval = context.latestString('askForApproval')?.toLowerCase();
+
+  if (
+    autoOccurrences.length > 0 ||
+    fullAutoOccurrences.length > 0 ||
+    approvalMode === 'yolo' ||
+    askForApproval === 'never'
+  ) {
+    context.consume(
+      ...autoOccurrences,
+      ...fullAutoOccurrences,
+      ...askOccurrences,
+      ...sandboxOccurrences,
+      ...context.all('approvalMode'),
+    );
+    args.push('--yolo');
+
+    if (askOccurrences.length > 0 && askForApproval && askForApproval !== 'never') {
+      warnings.push('Kimi precedence: mapped auto-approve behavior overrides unsupported ask-for-approval values.');
+    }
+  } else if (askOccurrences.length > 0 || sandboxOccurrences.length > 0 || context.all('approvalMode').length > 0) {
+    context.consume(...askOccurrences, ...sandboxOccurrences, ...context.all('approvalMode'));
+    warnings.push('Kimi: --ask-for-approval, --approval-mode, and --sandbox are not supported and were ignored.');
+  }
+
+  const model = context.latestString('model');
+  if (model) {
+    context.consumeKeys('model');
+    args.push('--model', model);
+  }
+
+  for (const directory of context.consumeAllCsvStrings('addDir', 'includeDirectories')) {
+    args.push('--add-dir', directory);
+  }
+
+  const workDir = context.latestString('workspace', 'cd');
+  if (workDir) {
+    context.consumeKeys('workspace', 'cd');
+    args.push('--work-dir', workDir);
+  }
+
+  const agent = context.latestString('agent');
+  if (agent) {
+    context.consumeKeys('agent');
+    args.push('--agent', agent);
+  }
+
+  return { mappedArgs: args, warnings };
+}
+
+function mapKiroFlags(context: ForwardFlagMapContext): ForwardMapResult {
+  const args: string[] = [];
+  const warnings: string[] = [];
+
+  const autoOccurrences = collectAutoApproveOccurrences(context);
+  const fullAutoOccurrences = context.all('fullAuto');
+  const askOccurrences = context.all('askForApproval');
+  const sandboxOccurrences = context.all('sandbox');
+  const approvalMode = context.latestString('approvalMode')?.toLowerCase();
+  const askForApproval = context.latestString('askForApproval')?.toLowerCase();
+
+  if (
+    autoOccurrences.length > 0 ||
+    fullAutoOccurrences.length > 0 ||
+    approvalMode === 'yolo' ||
+    askForApproval === 'never'
+  ) {
+    context.consume(
+      ...autoOccurrences,
+      ...fullAutoOccurrences,
+      ...askOccurrences,
+      ...sandboxOccurrences,
+      ...context.all('approvalMode'),
+    );
+    args.push('--trust-all-tools');
+  } else if (askOccurrences.length > 0 || sandboxOccurrences.length > 0 || context.all('approvalMode').length > 0) {
+    context.consume(...askOccurrences, ...sandboxOccurrences, ...context.all('approvalMode'));
+    warnings.push('Kiro: --ask-for-approval, --approval-mode, and --sandbox are not supported and were ignored.');
+  }
+
+  const agent = context.latestString('agent');
+  if (agent) {
+    context.consumeKeys('agent');
+    args.push('--agent', agent);
+  }
+
+  return { mappedArgs: args, warnings };
+}
+
+function mapCrushFlags(context: ForwardFlagMapContext): ForwardMapResult {
+  const args: string[] = [];
+  const warnings: string[] = [];
+
+  const autoOccurrences = collectAutoApproveOccurrences(context);
+  const fullAutoOccurrences = context.all('fullAuto');
+  const askOccurrences = context.all('askForApproval');
+  const sandboxOccurrences = context.all('sandbox');
+  const approvalMode = context.latestString('approvalMode')?.toLowerCase();
+  const askForApproval = context.latestString('askForApproval')?.toLowerCase();
+
+  if (
+    autoOccurrences.length > 0 ||
+    fullAutoOccurrences.length > 0 ||
+    approvalMode === 'yolo' ||
+    askForApproval === 'never'
+  ) {
+    context.consume(
+      ...autoOccurrences,
+      ...fullAutoOccurrences,
+      ...askOccurrences,
+      ...sandboxOccurrences,
+      ...context.all('approvalMode'),
+    );
+    args.push('--yolo');
+  } else if (askOccurrences.length > 0 || sandboxOccurrences.length > 0 || context.all('approvalMode').length > 0) {
+    context.consume(...askOccurrences, ...sandboxOccurrences, ...context.all('approvalMode'));
+    warnings.push('Crush: --ask-for-approval, --approval-mode, and --sandbox are not supported and were ignored.');
+  }
+
+  return { mappedArgs: args, warnings };
 }
 
 // ── Claude Code ──────────────────────────────────────────────────────
@@ -510,6 +777,7 @@ register({
   nativeResumeArgs: (s) => ['--thread', s.id],
   crossToolArgs: (prompt) => [prompt],
   resumeCommandDisplay: (s) => `amp --thread ${s.id}`,
+  mapHandoffFlags: mapAmpFlags,
 });
 
 // ── Kiro IDE ─────────────────────────────────────────────────────────
@@ -524,6 +792,7 @@ register({
   nativeResumeArgs: () => [],
   crossToolArgs: (prompt) => [prompt],
   resumeCommandDisplay: () => `kiro`,
+  mapHandoffFlags: mapKiroFlags,
 });
 
 // ── Crush CLI ────────────────────────────────────────────────────────
@@ -538,6 +807,7 @@ register({
   nativeResumeArgs: (s) => ['--session', s.id],
   crossToolArgs: (prompt) => [prompt],
   resumeCommandDisplay: (s) => `crush --session ${s.id}`,
+  mapHandoffFlags: mapCrushFlags,
 });
 
 // ── Cline ────────────────────────────────────────────────────────────
@@ -609,6 +879,7 @@ register({
   nativeResumeArgs: (s) => ['--session', s.id],
   crossToolArgs: (prompt) => ['--prompt', prompt],
   resumeCommandDisplay: (s) => `kimi --session ${s.id}`,
+  mapHandoffFlags: mapKimiFlags,
 });
 
 // ── Qwen Code ────────────────────────────────────────────────────────
