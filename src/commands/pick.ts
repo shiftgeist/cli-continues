@@ -35,7 +35,8 @@ export async function interactivePick(
       return;
     }
 
-    await showBanner(context.version, context.supportsColor);
+    const bannerCancelled = await showBanner(context.version, context.supportsColor);
+    if (bannerCancelled) return;
     await maybePromptGithubStar();
     clack.intro(chalk.bold('continue') + chalk.cyan.bold('s') + chalk.gray(' — session picker'));
 
@@ -96,13 +97,11 @@ export async function interactivePick(
       clack.outro(`Launching ${targetTool}`);
 
       if (session.cwd) process.chdir(session.cwd);
-      await resume(
-        session,
-        targetTool,
-        'inline',
-        forwarding,
-        { preset: options.preset, configPath: options.configPath, chain: options.chain },
-      );
+      await resume(session, targetTool, 'inline', forwarding, {
+        preset: options.preset,
+        configPath: options.configPath,
+        chain: options.chain,
+      });
       return;
     }
 
@@ -248,13 +247,11 @@ export async function interactivePick(
 
     // Change to session's working directory and resume
     if (session.cwd) process.chdir(session.cwd);
-    await resume(
-      session,
-      targetTool,
-      'inline',
-      forwarding,
-      { preset: options.preset, configPath: options.configPath, chain: options.chain },
-    );
+    await resume(session, targetTool, 'inline', forwarding, {
+      preset: options.preset,
+      configPath: options.configPath,
+      chain: options.chain,
+    });
   } catch (error) {
     if (clack.isCancel(error)) {
       clack.cancel('Cancelled');

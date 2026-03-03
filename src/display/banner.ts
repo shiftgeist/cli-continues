@@ -138,7 +138,7 @@ function renderLineFromDeck(cycleDeck: RotatingBannerLine[], index: number): str
   return lineFactory();
 }
 
-async function showRotatingBannerLine(): Promise<void> {
+async function showRotatingBannerLine(): Promise<boolean> {
   const cycleDeck = createCycleDeck();
   const stdin = process.stdin;
   const stdout = process.stdout;
@@ -147,13 +147,13 @@ async function showRotatingBannerLine(): Promise<void> {
   if (!canCycle) {
     console.log(`  ${renderLineFromDeck(cycleDeck, 0)}`);
     console.log();
-    return;
+    return false;
   }
 
   let index = 0;
   let timeout: NodeJS.Timeout | undefined;
 
-  await new Promise<void>((resolve) => {
+  return await new Promise<boolean>((resolve) => {
     let finished = false;
     let rawModeEnabled = false;
 
@@ -177,7 +177,7 @@ async function showRotatingBannerLine(): Promise<void> {
       finished = true;
       teardownInput();
       stdout.write('\n\n');
-      resolve();
+      resolve(false);
     };
 
     const abortFromCtrlC = (): void => {
@@ -188,7 +188,7 @@ async function showRotatingBannerLine(): Promise<void> {
       if (process.exitCode === undefined) {
         process.exitCode = 130;
       }
-      process.kill(process.pid, 'SIGINT');
+      resolve(true);
     };
 
     const armTimeout = (): void => {
@@ -228,7 +228,7 @@ async function showRotatingBannerLine(): Promise<void> {
         teardownInput();
         console.log(`  ${renderLineFromDeck(cycleDeck, 0)}`);
         console.log();
-        resolve();
+        resolve(false);
       }
     }
   });
@@ -238,8 +238,8 @@ async function showRotatingBannerLine(): Promise<void> {
  * ASCII art banner with warm-to-cool gradient and highlighted 's' brand mark.
  * All letters are exactly 4 chars wide, 1-space separated, 3 rows.
  */
-export async function showBanner(version: string, supportsColor: boolean): Promise<void> {
-  if (!supportsColor) return;
+export async function showBanner(version: string, supportsColor: boolean): Promise<boolean> {
+  if (!supportsColor) return false;
 
   // Letter glyphs: [top, mid, bot], each 4 chars wide
   const glyphs: string[][] = [
@@ -308,5 +308,5 @@ export async function showBanner(version: string, supportsColor: boolean): Promi
       chalk.gray(' (eg: npx continues --preset full for better context handoff!)'),
   );
   console.log(`  ${chalk.gray('💡 cont <n> or continues <tool> to quick-resume')}`);
-  await showRotatingBannerLine();
+  return await showRotatingBannerLine();
 }
