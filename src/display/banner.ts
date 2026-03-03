@@ -155,22 +155,40 @@ async function showRotatingBannerLine(): Promise<void> {
 
   await new Promise<void>((resolve) => {
     let finished = false;
+    let rawModeEnabled = false;
 
     const render = (): void => {
       const line = renderLineFromDeck(cycleDeck, index);
       stdout.write(`\r\x1B[2K  ${line} ${TAB_CYCLE_HINT}`);
     };
 
+    const teardownInput = (): void => {
+      if (timeout) clearTimeout(timeout);
+      stdin.off('keypress', onKeyPress);
+      if (rawModeEnabled) {
+        stdin.setRawMode(false);
+        rawModeEnabled = false;
+      }
+      stdin.pause();
+    };
+
     const finish = (): void => {
       if (finished) return;
       finished = true;
-
-      if (timeout) clearTimeout(timeout);
-      stdin.off('keypress', onKeyPress);
-      stdin.setRawMode(false);
-      stdin.pause();
+      teardownInput();
       stdout.write('\n\n');
       resolve();
+    };
+
+    const abortFromCtrlC = (): void => {
+      if (finished) return;
+      finished = true;
+      teardownInput();
+      stdout.write('\n\n');
+      if (process.exitCode === undefined) {
+        process.exitCode = 130;
+      }
+      process.kill(process.pid, 'SIGINT');
     };
 
     const armTimeout = (): void => {
@@ -180,8 +198,7 @@ async function showRotatingBannerLine(): Promise<void> {
 
     const onKeyPress = (_input: string, key: KeyPress): void => {
       if (key.ctrl && key.name === 'c') {
-        finish();
-        process.kill(process.pid, 'SIGINT');
+        abortFromCtrlC();
         return;
       }
 
@@ -197,12 +214,23 @@ async function showRotatingBannerLine(): Promise<void> {
       }
     };
 
-    emitKeypressEvents(stdin);
-    stdin.resume();
-    stdin.setRawMode(true);
-    stdin.on('keypress', onKeyPress);
-    render();
-    armTimeout();
+    try {
+      emitKeypressEvents(stdin);
+      stdin.resume();
+      stdin.setRawMode(true);
+      rawModeEnabled = true;
+      stdin.on('keypress', onKeyPress);
+      render();
+      armTimeout();
+    } catch {
+      if (!finished) {
+        finished = true;
+        teardownInput();
+        console.log(`  ${renderLineFromDeck(cycleDeck, 0)}`);
+        console.log();
+        resolve();
+      }
+    }
   });
 }
 

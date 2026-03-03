@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset, loadConfig } from '../config/index.js';
 import { logger } from '../logger.js';
 import { ALL_TOOLS, adapters } from '../parsers/registry.js';
 import type { SessionContext, SessionSource, UnifiedSession } from '../types/index.js';
@@ -14,6 +16,12 @@ import { extractContext, saveContext } from './index.js';
 import { getSourceLabels, safePath } from './markdown.js';
 import { IS_WINDOWS, WHICH_CMD } from './platform.js';
 
+export interface HandoffContextOptions {
+  preset?: string;
+  configPath?: string;
+  chain?: boolean;
+}
+
 /**
  * Resolve mapped + passthrough forward args for cross-tool launches.
  */
@@ -23,10 +31,6 @@ export function resolveCrossToolForwarding(
 ): ForwardResolution {
   const adapter = adapters[target];
   return resolveTargetForwarding(target, adapter?.mapHandoffFlags, options);
-}
-
-function hasOption(args: string[], ...flags: string[]): boolean {
-  return args.some((token) => flags.some((flag) => token === flag || token.startsWith(`${flag}=`)));
 }
 
 function hasConfigOverride(args: string[], key: string): boolean {
@@ -55,67 +59,51 @@ function hasConfigOverride(args: string[], key: string): boolean {
 }
 
 export function getDefaultHandoffInitArgs(target: SessionSource, forwardedArgs: string[] = []): string[] {
-  switch (target) {
-    case 'claude': {
-      return hasOption(forwardedArgs, '--dangerously-skip-permissions') ? [] : ['--dangerously-skip-permissions'];
-    }
-    case 'codex': {
-      const defaults: string[] = [];
+  if (target !== 'codex') return [];
 
-      if (!hasConfigOverride(forwardedArgs, 'model_reasoning_effort')) {
-        defaults.push('-c', 'model_reasoning_effort="high"');
-      }
+  const defaults: string[] = [];
 
-      const hasUnsafeAuto = hasOption(forwardedArgs, '--dangerously-bypass-approvals-and-sandbox', '--full-auto');
-
-      if (!hasUnsafeAuto && !hasOption(forwardedArgs, '--ask-for-approval', '-a')) {
-        defaults.push('--ask-for-approval', 'never');
-      }
-
-      if (!hasUnsafeAuto && !hasOption(forwardedArgs, '--sandbox', '-s')) {
-        defaults.push('--sandbox', 'danger-full-access');
-      }
-
-      if (!hasConfigOverride(forwardedArgs, 'model_reasoning_summary')) {
-        defaults.push('-c', 'model_reasoning_summary="detailed"');
-      }
-
-      if (!hasConfigOverride(forwardedArgs, 'model_supports_reasoning_summaries')) {
-        defaults.push('-c', 'model_supports_reasoning_summaries=true');
-      }
-
-      return defaults;
-    }
-    case 'copilot': {
-      return hasOption(forwardedArgs, '--allow-all', '--yolo') ? [] : ['--allow-all'];
-    }
-    case 'gemini': {
-      return hasOption(forwardedArgs, '--yolo', '-y', '--approval-mode') ? [] : ['--yolo'];
-    }
-    case 'cursor': {
-      return hasOption(forwardedArgs, '--yolo', '--force', '-f') ? [] : ['--yolo'];
-    }
-    case 'droid': {
-      return hasOption(forwardedArgs, '--skip-permissions-unsafe', '--auto') ? [] : ['--skip-permissions-unsafe'];
-    }
-    case 'kimi': {
-      return hasOption(forwardedArgs, '--yolo', '-y', '--yes') ? [] : ['--yolo'];
-    }
-    case 'amp': {
-      return hasOption(forwardedArgs, '--dangerously-allow-all') ? [] : ['--dangerously-allow-all'];
-    }
-    case 'kiro': {
-      return hasOption(forwardedArgs, '--trust-all-tools') ? [] : ['--trust-all-tools'];
-    }
-    case 'crush': {
-      return hasOption(forwardedArgs, '--yolo', '-y') ? [] : ['--yolo'];
-    }
-    case 'qwen-code': {
-      return hasOption(forwardedArgs, '--yolo', '-y', '--approval-mode') ? [] : ['--yolo'];
-    }
-    default:
-      return [];
+  if (!hasConfigOverride(forwardedArgs, 'model_reasoning_effort')) {
+    defaults.push('-c', 'model_reasoning_effort="high"');
   }
+
+  if (!hasConfigOverride(forwardedArgs, 'model_reasoning_summary')) {
+    defaults.push('-c', 'model_reasoning_summary="detailed"');
+  }
+
+  if (!hasConfigOverride(forwardedArgs, 'model_supports_reasoning_summaries')) {
+    defaults.push('-c', 'model_supports_reasoning_summaries=true');
+  }
+
+  return defaults;
+}
+
+function resolveHandoffConfig(options?: HandoffContextOptions): VerbosityConfig {
+  const loaded = loadConfig(options?.configPath);
+
+  let config = loaded;
+  if (options?.preset) {
+    try {
+      config = getPreset(options.preset);
+    } catch {
+      // Keep loaded config when an invalid preset is provided.
+    }
+  }
+
+  if (options?.chain === false) {
+    config = {
+      ...config,
+      agents: {
+        ...config.agents,
+        claude: {
+          ...config.agents.claude,
+          chainCompactedHistory: false,
+        },
+      },
+    };
+  }
+
+  return config;
 }
 
 /**
@@ -136,8 +124,9 @@ export async function crossToolResume(
   target: SessionSource,
   mode: 'inline' | 'reference' = 'inline',
   forwarding?: HandoffForwardingOptions,
+  contextOptions?: HandoffContextOptions,
 ): Promise<void> {
-  const context = await extractContext(session);
+  const context = await extractContext(session, resolveHandoffConfig(contextOptions));
   const cwd = session.cwd || process.cwd();
 
   // Always save handoff file to project directory (for sandboxed tools like Gemini)
@@ -242,6 +231,7 @@ export async function resume(
   target?: SessionSource,
   mode: 'inline' | 'reference' = 'inline',
   forwarding?: HandoffForwardingOptions,
+  contextOptions?: HandoffContextOptions,
 ): Promise<void> {
   const actualTarget = target || session.source;
 
@@ -250,7 +240,7 @@ export async function resume(
     await nativeResume(session);
   } else {
     // Different tool - use cross-tool injection
-    await crossToolResume(session, actualTarget, mode, forwarding);
+    await crossToolResume(session, actualTarget, mode, forwarding, contextOptions);
   }
 }
 
