@@ -43,7 +43,8 @@ describe('cross-tool forwarding', () => {
   });
 
   it('maps cursor target using agent semantics', () => {
-    expect(adapters.cursor.binaryName).toBe('agent');
+    expect(adapters.cursor.binaryName).toBe('cursor-agent');
+    expect(adapters.cursor.binaryFallbacks).toEqual(['agent']);
 
     const resolved = resolveCrossToolForwarding('cursor', {
       rawArgs: ['--sandbox', 'workspace-write', '--model', 'gpt-5', '--approve-mcps'],
