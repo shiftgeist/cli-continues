@@ -210,6 +210,21 @@ describe('cross-tool forwarding', () => {
     expect(command).toContain('--search');
   });
 
+  it('shows both preferred and fallback binaries in cursor native command preview', () => {
+    const session: UnifiedSession = {
+      id: 'abc123456789',
+      source: 'cursor',
+      cwd: '/tmp/project',
+      lines: 10,
+      bytes: 120,
+      createdAt: new Date('2026-02-20T00:00:00.000Z'),
+      updatedAt: new Date('2026-02-20T00:00:00.000Z'),
+      originalPath: '/tmp/session.jsonl',
+    };
+
+    expect(getResumeCommand(session)).toBe('cursor-agent --resume abc123456789 (or: agent --resume abc123456789)');
+  });
+
   it('does not add default approval flags to gemini command preview', () => {
     const session: UnifiedSession = {
       id: 'abc123456789',
