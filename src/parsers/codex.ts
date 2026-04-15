@@ -30,6 +30,9 @@ const CODEX_HOME_DIR = process.env.CODEX_HOME || path.join(homeDir(), '.codex');
 const CODEX_SESSIONS_DIR = path.join(CODEX_HOME_DIR, 'sessions');
 const CODEX_ARCHIVED_SESSIONS_DIR = path.join(CODEX_HOME_DIR, 'archived_sessions');
 
+const MAX_EXACT_LINE_COUNT_BYTES = 1024 * 1024;
+const MAX_METADATA_SCAN_BYTES = 1024 * 1024;
+
 /**
  * Find all Codex session files recursively
  */
@@ -51,26 +54,34 @@ async function parseSessionInfo(filePath: string): Promise<{
   let meta: CodexSessionMeta | null = null;
   let firstUserMessage = '';
 
-  await scanJsonlHead(filePath, 150, (parsed) => {
-    const msg = parsed as Record<string, unknown>;
+  await scanJsonlHead(
+    filePath,
+    150,
+    (parsed) => {
+      const msg = parsed as Record<string, unknown>;
 
-    if (msg.type === 'session_meta' && !meta) {
-      meta = msg as unknown as CodexSessionMeta;
-    }
-
-    if (!firstUserMessage && msg.type === 'event_msg') {
-      const payload = msg.payload as Record<string, unknown> | undefined;
-      if (payload?.type === 'user_message') {
-        firstUserMessage = (payload.message as string) || '';
+      if (msg.type === 'session_meta' && !meta) {
+        meta = msg as unknown as CodexSessionMeta;
       }
-    }
 
-    if (!firstUserMessage && msg.type === 'message' && (msg as Record<string, unknown>).role === 'user') {
-      firstUserMessage = typeof msg.content === 'string' ? (msg.content as string) : '';
-    }
+      if (!firstUserMessage && msg.type === 'event_msg') {
+        const payload = msg.payload as Record<string, unknown> | undefined;
+        if (payload?.type === 'user_message') {
+          firstUserMessage = (payload.message as string) || '';
+        }
+      }
 
-    return 'continue';
-  });
+      if (!firstUserMessage && msg.type === 'message' && (msg as Record<string, unknown>).role === 'user') {
+        firstUserMessage = typeof msg.content === 'string' ? (msg.content as string) : '';
+      }
+
+      if (meta && firstUserMessage) {
+        return 'stop';
+      }
+      return 'continue';
+    },
+    { maxBytes: MAX_METADATA_SCAN_BYTES },
+  );
 
   return { meta, firstUserMessage };
 }
@@ -103,8 +114,11 @@ export async function parseCodexSessions(): Promise<UnifiedSession[]> {
       if (!parsed) continue;
 
       const { meta, firstUserMessage } = await parseSessionInfo(filePath);
-      const stats = await getFileStats(filePath);
       const fileStats = fs.statSync(filePath);
+      const stats =
+        fileStats.size > MAX_EXACT_LINE_COUNT_BYTES
+          ? { lines: 0, bytes: fileStats.size }
+          : await getFileStats(filePath);
 
       const cwd = meta?.payload?.cwd || '';
       const gitUrl = meta?.payload?.git?.repository_url;
