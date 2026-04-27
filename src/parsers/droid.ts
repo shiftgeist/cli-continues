@@ -3,7 +3,13 @@ import * as path from 'path';
 import type { VerbosityConfig } from '../config/index.js';
 import { getPreset } from '../config/index.js';
 import { logger } from '../logger.js';
-import type { ConversationMessage, SessionContext, SessionNotes, UnifiedSession } from '../types/index.js';
+import type {
+  ConversationMessage,
+  SessionContext,
+  SessionNotes,
+  SessionParseOptions,
+  UnifiedSession,
+} from '../types/index.js';
 import type {
   DroidCompactionState,
   DroidEvent,
@@ -15,7 +21,7 @@ import type {
 import { DroidSettingsSchema } from '../types/schemas.js';
 import { isSystemContent } from '../utils/content.js';
 import { findFiles } from '../utils/fs-helpers.js';
-import { getFileStats, readJsonlFile, scanJsonlFile } from '../utils/jsonl.js';
+import { getFileStats, readJsonlFile, scanJsonlFile, scanJsonlHead } from '../utils/jsonl.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { cleanSummary, extractRepoFromCwd, homeDir } from '../utils/parser-helpers.js';
 import { cwdFromSlug } from '../utils/slug.js';
@@ -72,7 +78,10 @@ function readSettings(jsonlPath: string): DroidSettings | null {
 /**
  * Parse session metadata from session_start event and first user message
  */
-async function parseSessionInfo(filePath: string): Promise<{
+async function parseSessionInfo(
+  filePath: string,
+  options: SessionParseOptions = {},
+): Promise<{
   sessionStart: DroidSessionStart | null;
   firstUserMessage: string;
   firstTimestamp: string;
@@ -83,7 +92,7 @@ async function parseSessionInfo(filePath: string): Promise<{
   let firstTimestamp = '';
   let lastTimestamp = '';
 
-  await scanJsonlFile(filePath, (parsed) => {
+  const visitor = (parsed: unknown): 'continue' | 'stop' => {
     const event = parsed as DroidEvent;
 
     if (event.type === 'session_start' && !sessionStart) {
@@ -109,7 +118,13 @@ async function parseSessionInfo(filePath: string): Promise<{
     }
 
     return 'continue';
-  });
+  };
+
+  if (options.lightweight) {
+    await scanJsonlHead(filePath, 100, visitor);
+  } else {
+    await scanJsonlFile(filePath, visitor);
+  }
 
   return { sessionStart, firstUserMessage, firstTimestamp, lastTimestamp };
 }
@@ -117,17 +132,21 @@ async function parseSessionInfo(filePath: string): Promise<{
 /**
  * Parse all Droid sessions
  */
-export async function parseDroidSessions(): Promise<UnifiedSession[]> {
+export async function parseDroidSessions(options: SessionParseOptions = {}): Promise<UnifiedSession[]> {
   const files = await findSessionFiles();
   const sessionsById = new Map<string, UnifiedSession>();
+  const lightweight = options.lightweight === true;
 
   for (const filePath of files) {
     try {
-      const { sessionStart, firstUserMessage, firstTimestamp, lastTimestamp } = await parseSessionInfo(filePath);
+      const { sessionStart, firstUserMessage, firstTimestamp, lastTimestamp } = await parseSessionInfo(
+        filePath,
+        options,
+      );
       if (!sessionStart) continue;
 
       const fileStats = fs.statSync(filePath);
-      const stats = await getFileStats(filePath);
+      const stats = lightweight ? { lines: 0, bytes: fileStats.size } : await getFileStats(filePath);
       const settings = readSettings(filePath);
 
       const workspaceSlug = path.basename(path.dirname(filePath));
@@ -166,7 +185,7 @@ export async function parseDroidSessions(): Promise<UnifiedSession[]> {
   }
 
   return Array.from(sessionsById.values())
-    .filter((s) => s.lines > 1)
+    .filter((s) => lightweight || s.lines > 1)
     .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
 }
 

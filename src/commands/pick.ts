@@ -46,11 +46,16 @@ export async function interactivePick(
     let cwdSessions: UnifiedSession[] = [];
     let allSessionsLoaded = false;
 
+    const refreshCwdSessions = (): void => {
+      cwdSessions = options.all ? [] : sessions.filter((sess) => matchesCwd(sess.cwd, currentDir));
+    };
+
     const loadAllSessions = async (message = 'Loading all sessions...'): Promise<UnifiedSession[]> => {
       if (allSessionsLoaded) return sessions;
       const loading = clack.spinner();
       loading.start(message);
       sessions = await getAllSessions(options.rebuild);
+      refreshCwdSessions();
       allSessionsLoaded = true;
       loading.stop();
       return sessions;
@@ -67,6 +72,7 @@ export async function interactivePick(
         sessions = cwdSessions;
       } else {
         sessions = await getAllSessions(options.rebuild);
+        refreshCwdSessions();
         allSessionsLoaded = true;
       }
     }

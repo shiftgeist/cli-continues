@@ -97,7 +97,7 @@ describe('crossToolResume debug prompt mode', () => {
   it('rejects invalid runtime targets before extracting context or writing handoff files', async () => {
     const session = makeSession(cwd);
 
-    await expect(crossToolResume(session, 'not-a-tool' as never)).rejects.toThrow('Unknown target: not-a-tool');
+    await expect(crossToolResume(session, 'not-a-tool' as never)).rejects.toThrow('Unknown source: "not-a-tool"');
 
     expect(extractContextMock).not.toHaveBeenCalled();
     expect(saveContextMock).not.toHaveBeenCalled();

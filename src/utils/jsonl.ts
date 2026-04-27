@@ -158,8 +158,8 @@ export async function scanJsonlHead(
       try {
         const parsed = JSON.parse(line);
         return visitor(parsed, lineIndex);
-      } catch (err) {
-        logger.debug('jsonl: skipping invalid line at index', lineIndex, 'in', filePath, err);
+      } catch {
+        logger.debug('jsonl: skipping invalid line at index', lineIndex, 'in', filePath);
       }
       return 'continue';
     },
@@ -184,8 +184,8 @@ export async function scanJsonlFile(
       try {
         const parsed = JSON.parse(line);
         return visitor(parsed, lineIndex);
-      } catch (err) {
-        logger.debug('jsonl: skipping invalid line at index', lineIndex, 'in', filePath, err);
+      } catch {
+        logger.debug('jsonl: skipping invalid line at index', lineIndex, 'in', filePath);
       }
       return 'continue';
     },

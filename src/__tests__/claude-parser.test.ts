@@ -63,6 +63,23 @@ afterEach(() => {
 });
 
 describe('claude parser hardening', () => {
+  it('normalizes Windows cwd paths for direct Claude project lookup', async () => {
+    const configDir = makeConfigDir();
+    const id = '33333333-3333-4333-8333-333333333333';
+    const cwd = 'C:\\Users\\me\\my.project';
+    const projectDir = path.join(configDir, 'projects', 'C-Users-me-my-project');
+    writeJsonl(
+      path.join(projectDir, `${id}.jsonl`),
+      makeRows({ id, first: '2026-04-15T10:00:00.000Z', last: '2026-04-15T10:05:00.000Z', cwd }),
+    );
+
+    const { claudeProjectSlugFromCwd, parseClaudeSessions } = await loadClaudeParser(configDir);
+    const sessions = await parseClaudeSessions({ cwd, lightweight: true });
+
+    expect(claudeProjectSlugFromCwd(cwd)).toBe('C-Users-me-my-project');
+    expect(sessions.map((session) => session.id)).toContain(id);
+  });
+
   it('orders sessions by transcript timestamps instead of filesystem mtime', async () => {
     const configDir = makeConfigDir();
     const projectDir = path.join(configDir, 'projects', '-tmp-claude-project');

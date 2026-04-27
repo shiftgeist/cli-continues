@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { UnknownSourceError } from '../errors.js';
 import { adapters } from '../parsers/registry.js';
 import type { UnifiedSession } from '../types/index.js';
 import { getDefaultHandoffInitArgs, getResumeCommand, resolveCrossToolForwarding } from '../utils/resume.js';
@@ -320,7 +321,9 @@ describe('cross-tool forwarding', () => {
       originalPath: '/tmp/session.jsonl',
     };
 
-    expect(() => resolveCrossToolForwarding('not-a-tool' as never)).toThrow('Unknown target: not-a-tool');
-    expect(() => getResumeCommand(session, 'not-a-tool' as never)).toThrow('Unknown target: not-a-tool');
+    expect(() => resolveCrossToolForwarding('not-a-tool' as never)).toThrow(UnknownSourceError);
+    expect(() => resolveCrossToolForwarding('not-a-tool' as never)).toThrow('Unknown source: "not-a-tool"');
+    expect(() => getResumeCommand(session, 'not-a-tool' as never)).toThrow(UnknownSourceError);
+    expect(() => getResumeCommand(session, 'not-a-tool' as never)).toThrow('Unknown source: "not-a-tool"');
   });
 });

@@ -30,12 +30,16 @@ const CLAUDE_PROJECTS_DIR = process.env.CLAUDE_CONFIG_DIR
   ? path.join(process.env.CLAUDE_CONFIG_DIR, 'projects')
   : path.join(homeDir(), '.claude', 'projects');
 
+export function claudeProjectSlugFromCwd(cwd: string): string {
+  return cwd.replace(/\\/g, '/').replace(/:/g, '').replace(/[/.]/g, '-');
+}
+
 /**
  * Find all Claude session files recursively
  */
 async function findSessionFiles(options: SessionParseOptions = {}): Promise<string[]> {
   const roots = options.cwd
-    ? [path.join(CLAUDE_PROJECTS_DIR, options.cwd.replace(/[/.]/g, '-'))]
+    ? [path.join(CLAUDE_PROJECTS_DIR, claudeProjectSlugFromCwd(options.cwd))]
     : [CLAUDE_PROJECTS_DIR];
 
   return roots.flatMap((root) =>
@@ -883,7 +887,7 @@ export async function extractClaudeContext(session: UnifiedSession, config?: Ver
         if (!sessionNotes.reasoning) sessionNotes.reasoning = [];
         sessionNotes.reasoning.push(`Subagent "${description}": ${truncate(resultText, cfg.task.subagentResultChars)}`);
         subagentCount++;
-      } else if (!isTerminalTaskStatus(agent.status)) {
+      } else if (!isTerminalTaskStatus(status)) {
         if (cfg.pendingTasks.extractFromSubagents && pendingTasks.length < cfg.pendingTasks.maxTasks) {
           pendingTasks.push(`Incomplete subagent: ${description}`);
         }

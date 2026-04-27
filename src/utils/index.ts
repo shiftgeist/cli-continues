@@ -2,8 +2,9 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { VerbosityConfig } from '../config/index.js';
+import { UnknownSourceError } from '../errors.js';
 import { logger } from '../logger.js';
-import { adapters } from '../parsers/registry.js';
+import { ALL_TOOLS, adapters } from '../parsers/registry.js';
 import type { SessionContext, SessionParseOptions, SessionSource, UnifiedSession } from '../types/index.js';
 import { homeDir } from './parser-helpers.js';
 import { matchesCwd } from './slug.js';
@@ -145,8 +146,8 @@ export async function buildIndex(force = false): Promise<UnifiedSession[]> {
     sourceSessions.push(session);
     sessionsBySource.set(session.source, sourceSessions);
   }
-  for (const [source, sourceSessions] of sessionsBySource) {
-    writeIndexFile(sourceIndexFile(source), sourceSessions, source);
+  for (const source of ALL_TOOLS) {
+    writeIndexFile(sourceIndexFile(source), sessionsBySource.get(source) ?? [], source);
   }
 
   return allSessions;
@@ -230,23 +231,11 @@ export async function getSessionsBySource(source: SessionSource, forceRebuild = 
 }
 
 /**
- * Get current-working-directory sessions from sources that support direct cwd lookup.
+ * Get current-working-directory sessions from the complete index.
  */
 export async function getSessionsByCwd(cwd: string, forceRebuild = false): Promise<UnifiedSession[]> {
-  if (!forceRebuild && !indexNeedsRebuild()) {
-    return loadIndex().filter((session) => matchesCwd(session.cwd, cwd));
-  }
-
-  const cwdLookupAdapters = Object.values(adapters).filter((adapter) => adapter.supportsCwdLookup);
-  const results = await Promise.allSettled(
-    cwdLookupAdapters.map((adapter) => adapter.parseSessions({ cwd, lightweight: true })),
-  );
-
-  return results
-    .filter((result): result is PromiseFulfilledResult<UnifiedSession[]> => result.status === 'fulfilled')
-    .flatMap((result) => result.value)
-    .filter((session) => matchesCwd(session.cwd, cwd))
-    .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  const sessions = await buildIndex(forceRebuild);
+  return sessions.filter((session) => matchesCwd(session.cwd, cwd));
 }
 
 /**
@@ -262,7 +251,7 @@ export async function findSession(id: string): Promise<UnifiedSession | null> {
  */
 export async function extractContext(session: UnifiedSession, config?: VerbosityConfig): Promise<SessionContext> {
   const adapter = adapters[session.source];
-  if (!adapter) throw new Error(`Unknown session source: ${session.source}`);
+  if (!adapter) throw new UnknownSourceError(session.source);
   return adapter.extractContext(session, config);
 }
 

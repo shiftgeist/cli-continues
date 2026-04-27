@@ -13,6 +13,7 @@ vi.mock('../utils/parser-helpers.js', () => ({
 }));
 
 vi.mock('../parsers/registry.js', () => ({
+  ALL_TOOLS: ['claude', 'codex'],
   adapters: {
     claude: {
       name: 'claude',
@@ -28,7 +29,7 @@ vi.mock('../parsers/registry.js', () => ({
   },
 }));
 
-const { getSessionsByCwd, getSessionsBySource } = await import('../utils/index.js');
+const { getAllSessions, getSessionsByCwd, getSessionsBySource } = await import('../utils/index.js');
 
 function makeSession(id: string, source: SessionSource, cwd = '/tmp/project'): UnifiedSession {
   return {
@@ -77,14 +78,29 @@ describe('source-scoped session index', () => {
     expect(testState.parseClaude).toHaveBeenCalledTimes(1);
   });
 
-  it('cwd lookups call only adapters that support direct cwd lookup', async () => {
+  it('full rebuild clears stale per-source caches for tools with zero sessions', async () => {
+    testState.parseCodex.mockResolvedValue([makeSession('codex-old', 'codex')]);
+    await getSessionsBySource('codex');
+
+    testState.parseClaude.mockResolvedValue([makeSession('claude-1', 'claude')]);
+    testState.parseCodex.mockResolvedValue([]);
+    await getAllSessions(true);
+
+    testState.parseCodex.mockClear();
+    const sessions = await getSessionsBySource('codex');
+
+    expect(sessions).toEqual([]);
+    expect(testState.parseCodex).not.toHaveBeenCalled();
+  });
+
+  it('stale cwd lookups rebuild the full index and include adapters without direct cwd lookup', async () => {
     testState.parseClaude.mockResolvedValue([makeSession('claude-1', 'claude', '/tmp/project/subdir')]);
     testState.parseCodex.mockResolvedValue([makeSession('codex-1', 'codex', '/tmp/project')]);
 
     const sessions = await getSessionsByCwd('/tmp/project');
 
-    expect(sessions.map((session) => session.id)).toEqual(['claude-1']);
-    expect(testState.parseClaude).toHaveBeenCalledWith({ cwd: '/tmp/project', lightweight: true });
-    expect(testState.parseCodex).not.toHaveBeenCalled();
+    expect(sessions.map((session) => session.id)).toEqual(['claude-1', 'codex-1']);
+    expect(testState.parseClaude).toHaveBeenCalledWith();
+    expect(testState.parseCodex).toHaveBeenCalledWith();
   });
 });

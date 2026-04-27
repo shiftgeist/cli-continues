@@ -225,7 +225,7 @@ export function extractAnthropicToolData(
           diff = diffResult.diff;
           diffStats = countDiffStats(diff);
         } else if (patchText && patchFiles.length > 0) {
-          diff = patchText;
+          diff = truncate(patchText, config.edit.maxChars);
           diffStats = countDiffStats(diff);
         }
 
@@ -386,7 +386,9 @@ function getInputString(input: Record<string, unknown>, key: string): string {
 function extractPatchFilePaths(patch: string): string[] {
   const paths = new Set<string>();
   for (const line of patch.split('\n')) {
-    const match = line.match(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/) || line.match(/^[-+]{3}\s+(?:[ab]\/)?(.+)$/);
+    const match =
+      line.match(/^\*\*\* (?:Add|Update|Delete) File: ([^\t\r\n]+)/) ||
+      line.match(/^[-+]{3}\s+(?:[ab]\/)?([^\t\r\n]+)/);
     if (!match?.[1]) continue;
     const filePath = match[1].trim();
     if (filePath && filePath !== '/dev/null') paths.add(filePath);

@@ -229,4 +229,58 @@ describe('Claude task reconciliation', () => {
     });
     expect(ctx.sessionNotes?.subagentResults?.[0].result).toContain('transcript timestamps');
   });
+
+  it('does not mark completed Agent sidecars without substantial text as incomplete', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'continues-claude-agent-completed-'));
+    tempDirs.push(tmp);
+    const filePath = path.join(tmp, 'session.jsonl');
+    const sessionDir = filePath.replace(/\.jsonl$/, '');
+    const sidecarPath = path.join(sessionDir, 'subagents', 'agent-completed123.jsonl');
+
+    writeJsonl(filePath, [
+      {
+        type: 'assistant',
+        timestamp: '2026-03-03T00:00:01.000Z',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu-agent-completed',
+              name: 'Agent',
+              input: { description: 'Check completed sidecar' },
+            },
+          ],
+        },
+      },
+      {
+        type: 'user',
+        timestamp: '2026-03-03T00:00:02.000Z',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'toolu-agent-completed', content: [{ type: 'text', text: '' }] },
+          ],
+        },
+        toolUseResult: { agentId: 'completed123' },
+      },
+    ]);
+
+    writeJsonl(sidecarPath, [
+      {
+        type: 'assistant',
+        timestamp: '2026-03-03T00:00:03.000Z',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+      },
+    ]);
+
+    const ctx = await extractClaudeContext(makeSession(filePath), getPreset('standard'));
+
+    expect(ctx.sessionNotes?.subagentResults?.[0]).toMatchObject({
+      taskId: 'completed123',
+      description: 'Check completed sidecar',
+      status: 'completed',
+    });
+    expect(ctx.pendingTasks).not.toContain('Incomplete subagent: Check completed sidecar');
+  });
 });

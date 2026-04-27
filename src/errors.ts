@@ -3,6 +3,8 @@
  * Replaces anonymous Error throws with machine-readable error types.
  */
 
+import { TOOL_NAMES } from './types/tool-names.js';
+
 /**
  * Base error for all continues errors.
  * Includes an optional `cause` for error chaining.
@@ -47,7 +49,7 @@ export class ToolNotAvailableError extends ContinuesError {
 export class UnknownSourceError extends ContinuesError {
   override readonly name = 'UnknownSourceError';
   constructor(public readonly source: string) {
-    super(`Unknown source: "${source}". Valid sources: claude, codex, copilot, gemini, opencode, droid, cursor`);
+    super(`Unknown source: "${source}". Valid sources: ${TOOL_NAMES.join(', ')}`);
   }
 }
 

@@ -109,4 +109,19 @@ describe('droid parser hardening', () => {
     expect(sessions[0].id).toBe(newerId);
     expect(sessions[0].updatedAt.toISOString()).toBe('2026-04-15T11:30:00.000Z');
   });
+
+  it('keeps lightweight discovery bounded and preserves sessions with zero line counts', async () => {
+    const home = makeHome();
+    const id = '55555555-5555-4555-8555-555555555555';
+    writeJsonl(
+      path.join(home, '.factory', 'projects', 'tmp-droid-project', `${id}.jsonl`),
+      makeRows({ id, fillerCount: 120, last: '2026-04-15T11:30:00.000Z' }),
+    );
+
+    const { parseDroidSessions } = await loadDroidParser(home);
+    const sessions = await parseDroidSessions({ lightweight: true });
+
+    expect(sessions.map((session) => session.id)).toContain(id);
+    expect(sessions.find((session) => session.id === id)?.lines).toBe(0);
+  });
 });

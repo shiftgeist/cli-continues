@@ -6,7 +6,9 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getPreset } from '../config/index.js';
+import { logger } from '../logger.js';
 import type { ConversationMessage } from '../types/index.js';
 import { classifyToolName } from '../types/tool-names.js';
 import {
@@ -17,7 +19,7 @@ import {
   isSystemContent,
 } from '../utils/content.js';
 import { countDiffStats, extractStdoutTail, formatEditDiff, formatNewFileDiff } from '../utils/diff.js';
-import { findFiles, listSubdirectories } from '../utils/fs-helpers.js';
+import { findFiles, listSubdirectories, mapConcurrent } from '../utils/fs-helpers.js';
 import { getFileStats, readJsonlFile, scanJsonlFile, scanJsonlHead } from '../utils/jsonl.js';
 import { extractRepo, trimMessages } from '../utils/parser-helpers.js';
 import {
@@ -189,6 +191,26 @@ describe('scanJsonlFile', () => {
 
     expect(visited).toEqual(['a', 'b']);
   });
+
+  it('skips malformed lines without logging parser error objects', async () => {
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'test.jsonl');
+    fs.writeFileSync(file, '{"i":1}\nnot-json\n{"i":2}\n');
+    const debugSpy = vi.spyOn(logger, 'debug').mockImplementation(() => {
+      // keep test output quiet
+    });
+
+    const visited: number[] = [];
+    await scanJsonlFile(file, (parsed) => {
+      visited.push((parsed as { i: number }).i);
+      return 'continue';
+    });
+
+    expect(visited).toEqual([1, 2]);
+    expect(debugSpy).toHaveBeenCalledWith('jsonl: skipping invalid line at index', 1, 'in', file);
+    expect(debugSpy.mock.calls[0]).toHaveLength(4);
+    debugSpy.mockRestore();
+  });
 });
 
 describe('getFileStats', () => {
@@ -278,6 +300,17 @@ describe('listSubdirectories', () => {
 
   it('returns empty for non-existent directory', () => {
     expect(listSubdirectories('/tmp/nonexistent-dir')).toEqual([]);
+  });
+});
+
+describe('mapConcurrent', () => {
+  it('preserves input order while mapping concurrently', async () => {
+    const result = await mapConcurrent([3, 1, 2], 2, async (value, index) => {
+      await new Promise((resolve) => setTimeout(resolve, (3 - index) * 2));
+      return `${index}:${value}`;
+    });
+
+    expect(result).toEqual(['0:3', '1:1', '2:2']);
   });
 });
 
@@ -519,6 +552,60 @@ describe('extractAnthropicToolData', () => {
       category: 'edit',
       filePath: 'src/example.ts',
     });
+  });
+
+  it('strips tab timestamp suffixes from unified diff file paths', () => {
+    const patch = [
+      '--- a/src/example.ts\t2026-04-27 10:00:00',
+      '+++ b/src/example.ts\t2026-04-27 10:01:00',
+      '@@',
+      '-old',
+      '+new',
+    ].join('\n');
+    const messages: AnthropicMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tu1', name: 'ApplyPatch', input: { patch } }],
+      },
+    ];
+
+    const { filesModified, summaries } = extractAnthropicToolData(messages);
+
+    expect(filesModified).toContain('src/example.ts');
+    expect(filesModified.some((filePath) => filePath.includes('\t'))).toBe(false);
+    expect(summaries[0].samples[0].data).toMatchObject({
+      category: 'edit',
+      filePath: 'src/example.ts',
+    });
+  });
+
+  it('caps stored patch diffs at the edit max chars limit', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: src/big.ts',
+      '@@',
+      ...Array.from({ length: 40 }, (_, index) => `+line ${index}`),
+      '*** End Patch',
+    ].join('\n');
+    const config = {
+      ...getPreset('minimal'),
+      edit: { ...getPreset('minimal').edit, maxChars: 80 },
+    };
+    const messages: AnthropicMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tu1', name: 'ApplyPatch', input: { input: patch } }],
+      },
+    ];
+
+    const { summaries } = extractAnthropicToolData(messages, config);
+    const sample = summaries[0].samples[0].data;
+
+    expect(sample).toMatchObject({ category: 'edit', filePath: 'src/big.ts' });
+    if (sample?.category === 'edit') {
+      expect(sample.diff?.length).toBeLessThanOrEqual(80);
+      expect(sample.diff).toContain('...');
+    }
   });
 
   it('handles empty messages', () => {
