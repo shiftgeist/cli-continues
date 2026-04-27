@@ -3,9 +3,10 @@
  * Each parser normalizes its raw tool events and uses these utilities
  * for consistent, concise summaries across all 7 CLIs.
  */
-import type { StructuredToolSample, ToolSample, ToolUsageSummary } from '../types/index.js';
+
 import type { VerbosityConfig } from '../config/index.js';
 import { getPreset } from '../config/index.js';
+import type { StructuredToolSample, ToolSample, ToolUsageSummary } from '../types/index.js';
 
 // ── Formatting Helpers ──────────────────────────────────────────────────────
 

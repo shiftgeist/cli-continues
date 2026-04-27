@@ -6,45 +6,62 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+  extractAmpContext,
+  extractAntigravityContext,
   extractClaudeContext,
+  extractClineContext,
   extractCodexContext,
   extractCopilotContext,
+  extractCrushContext,
   extractCursorContext,
   extractDroidContext,
   extractGeminiContext,
-  extractOpenCodeContext,
-  extractAmpContext,
-  extractKiroContext,
-  extractCrushContext,
-  extractClineContext,
-  extractRooCodeContext,
   extractKiloCodeContext,
-  extractAntigravityContext,
   extractKimiContext,
+  extractKiroContext,
+  extractOpenCodeContext,
   extractQwenCodeContext,
+  extractRooCodeContext,
+  parseAmpSessions,
+  parseAntigravitySessions,
   parseClaudeSessions,
+  parseClineSessions,
   parseCodexSessions,
   parseCopilotSessions,
+  parseCrushSessions,
   parseCursorSessions,
   parseDroidSessions,
   parseGeminiSessions,
-  parseOpenCodeSessions,
-  parseAmpSessions,
-  parseKiroSessions,
-  parseCrushSessions,
-  parseClineSessions,
-  parseRooCodeSessions,
   parseKiloCodeSessions,
-  parseAntigravitySessions,
   parseKimiSessions,
+  parseKiroSessions,
+  parseOpenCodeSessions,
   parseQwenCodeSessions,
+  parseRooCodeSessions,
 } from '../parsers/index.js';
 import type { SessionContext, SessionSource, UnifiedSession } from '../types/index.js';
 
 const RESULTS_DIR = path.join(process.env.HOME || '~', '.continues', 'e2e-test-results');
 fs.mkdirSync(RESULTS_DIR, { recursive: true });
 
-const ALL_SOURCES: SessionSource[] = ['claude', 'copilot', 'gemini', 'codex', 'opencode', 'droid', 'cursor', 'amp', 'kiro', 'crush', 'cline', 'roo-code', 'kilo-code', 'antigravity', 'kimi', 'qwen-code'];
+const ALL_SOURCES: SessionSource[] = [
+  'claude',
+  'copilot',
+  'gemini',
+  'codex',
+  'opencode',
+  'droid',
+  'cursor',
+  'amp',
+  'kiro',
+  'crush',
+  'cline',
+  'roo-code',
+  'kilo-code',
+  'antigravity',
+  'kimi',
+  'qwen-code',
+];
 
 const parsers: Record<SessionSource, () => Promise<UnifiedSession[]>> = {
   claude: parseClaudeSessions,

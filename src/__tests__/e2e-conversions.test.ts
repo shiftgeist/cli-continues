@@ -13,46 +13,63 @@
 
 import { execSync } from 'child_process';
 import * as fs from 'fs';
-import { WHICH_CMD } from '../utils/platform.js';
 import * as path from 'path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
+  extractAmpContext,
+  extractAntigravityContext,
   extractClaudeContext,
+  extractClineContext,
   extractCodexContext,
   extractCopilotContext,
+  extractCrushContext,
   extractCursorContext,
   extractDroidContext,
   extractGeminiContext,
-  extractOpenCodeContext,
-  extractAmpContext,
-  extractKiroContext,
-  extractCrushContext,
-  extractClineContext,
-  extractRooCodeContext,
   extractKiloCodeContext,
-  extractAntigravityContext,
   extractKimiContext,
+  extractKiroContext,
+  extractOpenCodeContext,
   extractQwenCodeContext,
+  extractRooCodeContext,
+  parseAmpSessions,
+  parseAntigravitySessions,
   parseClaudeSessions,
+  parseClineSessions,
   parseCodexSessions,
   parseCopilotSessions,
+  parseCrushSessions,
   parseCursorSessions,
   parseDroidSessions,
   parseGeminiSessions,
-  parseOpenCodeSessions,
-  parseAmpSessions,
-  parseKiroSessions,
-  parseCrushSessions,
-  parseClineSessions,
-  parseRooCodeSessions,
   parseKiloCodeSessions,
-  parseAntigravitySessions,
   parseKimiSessions,
+  parseKiroSessions,
+  parseOpenCodeSessions,
   parseQwenCodeSessions,
+  parseRooCodeSessions,
 } from '../parsers/index.js';
 import type { SessionContext, SessionSource, UnifiedSession } from '../types/index.js';
+import { WHICH_CMD } from '../utils/platform.js';
 
-const ALL_SOURCES: SessionSource[] = ['claude', 'copilot', 'gemini', 'codex', 'opencode', 'droid', 'cursor', 'amp', 'kiro', 'crush', 'cline', 'roo-code', 'kilo-code', 'antigravity', 'kimi', 'qwen-code'];
+const ALL_SOURCES: SessionSource[] = [
+  'claude',
+  'copilot',
+  'gemini',
+  'codex',
+  'opencode',
+  'droid',
+  'cursor',
+  'amp',
+  'kiro',
+  'crush',
+  'cline',
+  'roo-code',
+  'kilo-code',
+  'antigravity',
+  'kimi',
+  'qwen-code',
+];
 
 const parsers: Record<SessionSource, () => Promise<UnifiedSession[]>> = {
   claude: parseClaudeSessions,

@@ -6,7 +6,7 @@ import { showNoSessionsHelp } from '../display/help.js';
 import { maybePromptGithubStar } from '../display/star-prompt.js';
 import type { SessionSource, UnifiedSession } from '../types/index.js';
 import type { HandoffForwardingOptions } from '../utils/forward-flags.js';
-import { getAllSessions, getSessionsBySource } from '../utils/index.js';
+import { getAllSessions, getSessionsByCwd, getSessionsBySource } from '../utils/index.js';
 import { getResumeCommand, nativeResume, resolveCrossToolForwarding, resume } from '../utils/resume.js';
 import { matchesCwd } from '../utils/slug.js';
 import { checkSingleToolAutoResume, selectTargetTool, showForwardingWarnings } from './_shared.js';
@@ -40,14 +40,35 @@ export async function interactivePick(
     await maybePromptGithubStar();
     clack.intro(chalk.bold('continue') + chalk.cyan.bold('s') + chalk.gray(' — session picker'));
 
+    const currentDir = process.cwd();
+    const dirName = currentDir.split('/').pop() || currentDir;
+    let sessions: UnifiedSession[] = [];
+    let cwdSessions: UnifiedSession[] = [];
+    let allSessionsLoaded = false;
+
+    const loadAllSessions = async (message = 'Loading all sessions...'): Promise<UnifiedSession[]> => {
+      if (allSessionsLoaded) return sessions;
+      const loading = clack.spinner();
+      loading.start(message);
+      sessions = await getAllSessions(options.rebuild);
+      allSessionsLoaded = true;
+      loading.stop();
+      return sessions;
+    };
+
     const s = clack.spinner();
     s.start('Loading sessions...');
-
-    let sessions: UnifiedSession[];
     if (options.source) {
       sessions = await getSessionsBySource(options.source as SessionSource, options.rebuild);
+      cwdSessions = options.all ? [] : sessions.filter((sess) => matchesCwd(sess.cwd, currentDir));
     } else {
-      sessions = await getAllSessions(options.rebuild);
+      cwdSessions = options.all ? [] : await getSessionsByCwd(currentDir, options.rebuild);
+      if (cwdSessions.length > 0) {
+        sessions = cwdSessions;
+      } else {
+        sessions = await getAllSessions(options.rebuild);
+        allSessionsLoaded = true;
+      }
     }
 
     s.stop();
@@ -58,12 +79,7 @@ export async function interactivePick(
       return;
     }
 
-    // Check for sessions matching current working directory (includes subdirectories)
-    const currentDir = process.cwd();
-    const cwdSessions = options.all ? [] : sessions.filter((sess) => matchesCwd(sess.cwd, currentDir));
     const hasCwdSessions = cwdSessions.length > 0;
-
-    const dirName = currentDir.split('/').pop() || currentDir;
 
     if (!options.all && !hasCwdSessions && sessions.length > 0) {
       clack.log.info(chalk.gray(`No sessions in ${dirName}, showing all`));
@@ -156,7 +172,7 @@ export async function interactivePick(
           if (scope === 'cwd') {
             filterOptions.push({
               value: 'scope-toggle',
-              label: chalk.dim(`Show all sessions (${sessions.length})`),
+              label: chalk.dim(allSessionsLoaded ? `Show all sessions (${sessions.length})` : 'Show all sessions'),
             });
           } else {
             filterOptions.push({
@@ -179,7 +195,12 @@ export async function interactivePick(
 
         // Scope toggle: flip and re-render
         if (toolFilter === 'scope-toggle') {
-          scope = scope === 'cwd' ? 'all' : 'cwd';
+          if (scope === 'cwd') {
+            await loadAllSessions();
+            scope = 'all';
+          } else {
+            scope = 'cwd';
+          }
           continue;
         }
 

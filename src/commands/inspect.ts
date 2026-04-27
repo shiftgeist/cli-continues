@@ -5,13 +5,14 @@
  *
  * Designed for verifying that nothing is silently dropped during extraction.
  */
+
+import chalk from 'chalk';
 import * as fs from 'fs';
 import * as path from 'path';
-import chalk from 'chalk';
-import { getPreset, loadConfig } from '../config/index.js';
 import type { VerbosityConfig } from '../config/index.js';
+import { getPreset, loadConfig } from '../config/index.js';
 import { adapters } from '../parsers/registry.js';
-import type { SessionContext, ReasoningStep, UnifiedSession } from '../types/index.js';
+import type { ReasoningStep, SessionContext, UnifiedSession } from '../types/index.js';
 import { classifyToolName } from '../types/tool-names.js';
 import { findSession } from '../utils/index.js';
 import { readJsonlFile } from '../utils/jsonl.js';
@@ -139,9 +140,7 @@ interface ToolResultFileInfo {
  * Analyze raw JSONL messages for event distribution, content blocks,
  * and tool call categories.
  */
-function analyzeRawMessages(
-  messages: Array<Record<string, unknown>>,
-): {
+function analyzeRawMessages(messages: Array<Record<string, unknown>>): {
   events: RawEventCounts;
   blocks: ContentBlockCounts;
   tools: ToolCategoryCounts;
@@ -299,13 +298,7 @@ function computeMarkdownStats(ctx: SessionContext): MarkdownStats {
 
 function renderHeader(sessionId: string): string {
   const line = '═'.repeat(66);
-  return [
-    '',
-    chalk.bold(line),
-    chalk.bold(`  SESSION INSPECTION: ${sessionId}`),
-    chalk.bold(line),
-    '',
-  ].join('\n');
+  return ['', chalk.bold(line), chalk.bold(`  SESSION INSPECTION: ${sessionId}`), chalk.bold(line), ''].join('\n');
 }
 
 function renderSourceFiles(
@@ -317,9 +310,7 @@ function renderSourceFiles(
 ): string {
   const lines: string[] = [chalk.cyan.bold('📂 Source Files')];
 
-  lines.push(
-    `  Main JSONL:   ${chalk.gray(session.originalPath)} (${mainLines} lines, ${formatBytes(mainSize)})`,
-  );
+  lines.push(`  Main JSONL:   ${chalk.gray(session.originalPath)} (${mainLines} lines, ${formatBytes(mainSize)})`);
 
   if (subagentFiles.length > 0) {
     const totalSubLines = subagentFiles.reduce((s, f) => s + f.lines, 0);
@@ -337,9 +328,7 @@ function renderSourceFiles(
     const totalSize = toolResultFiles.reduce((s, f) => s + f.size, 0);
     lines.push(`  Tool Results: ${toolResultFiles.length} files (${formatBytes(totalSize)} total)`);
     for (const f of toolResultFiles) {
-      lines.push(
-        `    ${pad(f.name, 45)} ${rpad(f.lines, 5)} lines  (${formatBytes(f.size)})`,
-      );
+      lines.push(`    ${pad(f.name, 45)} ${rpad(f.lines, 5)} lines  (${formatBytes(f.size)})`);
     }
   }
 
@@ -363,9 +352,7 @@ function renderEventDistribution(events: RawEventCounts, source: string): string
   for (const [type, count] of sorted) {
     const frac = count / events.total;
     const pct = (frac * 100).toFixed(1);
-    lines.push(
-      `  ${bar(frac)}  ${pad(type + ':', maxLabel + 1)} ${rpad(count, 6)}  (${rpad(pct, 5)}%)`,
-    );
+    lines.push(`  ${bar(frac)}  ${pad(type + ':', maxLabel + 1)} ${rpad(count, 6)}  (${rpad(pct, 5)}%)`);
   }
 
   lines.push(`  ${' '.repeat(30)}  ${pad('TOTAL:', maxLabel + 1)} ${rpad(events.total, 6)}`);
@@ -402,9 +389,7 @@ function renderToolCategories(tools: ToolCategoryCounts): string {
 
   for (const [category, count] of sorted) {
     const barWidth = Math.max(1, Math.round((count / maxCount) * 20));
-    lines.push(
-      `  ${pad(category + ':', maxLabel + 1)} ${rpad(count, 5)}  ${'█'.repeat(barWidth)}`,
-    );
+    lines.push(`  ${pad(category + ':', maxLabel + 1)} ${rpad(count, 5)}  ${'█'.repeat(barWidth)}`);
   }
 
   lines.push(`  ${pad('TOTAL:', maxLabel + 1)} ${rpad(tools.total, 5)}`);
@@ -415,20 +400,13 @@ function renderToolCategories(tools: ToolCategoryCounts): string {
 function renderSubagentAnalysis(subagents: SubagentFileInfo[]): string {
   if (subagents.length === 0) return '';
 
-  const lines: string[] = [
-    chalk.cyan.bold(`🔍 Subagent Analysis (${subagents.length} found)`),
-  ];
-  lines.push(
-    `  ${pad('Name', 30)} ${pad('Status', 12)} ${rpad('Tools', 5)}  ${rpad('Lines', 5)}`,
-  );
+  const lines: string[] = [chalk.cyan.bold(`🔍 Subagent Analysis (${subagents.length} found)`)];
+  lines.push(`  ${pad('Name', 30)} ${pad('Status', 12)} ${rpad('Tools', 5)}  ${rpad('Lines', 5)}`);
 
   for (const s of subagents) {
-    const statusColored =
-      s.status === 'completed' ? chalk.green(pad(s.status, 12)) : chalk.red(pad(s.status, 12));
+    const statusColored = s.status === 'completed' ? chalk.green(pad(s.status, 12)) : chalk.red(pad(s.status, 12));
     const shortName = s.name.replace(/\.jsonl$/, '');
-    lines.push(
-      `  ${pad(shortName, 30)} ${statusColored} ${rpad(s.toolCallCount, 5)}  ${rpad(s.lines, 5)}`,
-    );
+    lines.push(`  ${pad(shortName, 30)} ${statusColored} ${rpad(s.toolCallCount, 5)}  ${rpad(s.lines, 5)}`);
   }
 
   lines.push('');
@@ -438,9 +416,7 @@ function renderSubagentAnalysis(subagents: SubagentFileInfo[]): string {
 function renderReasoningChain(steps: ReasoningStep[]): string {
   if (!steps || steps.length === 0) return '';
 
-  const lines: string[] = [
-    chalk.cyan.bold(`🧠 Reasoning Chain (${steps.length} steps extracted)`),
-  ];
+  const lines: string[] = [chalk.cyan.bold(`🧠 Reasoning Chain (${steps.length} steps extracted)`)];
 
   for (const step of steps) {
     const thought = step.thought.length > 60 ? step.thought.slice(0, 57) + '...' : step.thought;
@@ -492,8 +468,7 @@ function renderConversionSummary(
   const ratio = rawInput > 0 ? ((markdownBytes / rawInput) * 100).toFixed(1) : '0.0';
 
   // Count content events (non-progress)
-  const contentEvents =
-    (events.byType.get('assistant') || 0) + (events.byType.get('user') || 0);
+  const contentEvents = (events.byType.get('assistant') || 0) + (events.byType.get('user') || 0);
 
   const subagentsCaptured = context.sessionNotes?.subagentResults?.length || 0;
   const reasoningCaptured = context.sessionNotes?.reasoningSteps?.length || 0;
@@ -709,10 +684,7 @@ export async function inspectSession(
 
   // 6. Write markdown if requested
   if (opts.writeMd !== undefined && opts.writeMd !== false) {
-    const mdPath =
-      typeof opts.writeMd === 'string'
-        ? opts.writeMd
-        : `inspect-${session.id.slice(0, 8)}.md`;
+    const mdPath = typeof opts.writeMd === 'string' ? opts.writeMd : `inspect-${session.id.slice(0, 8)}.md`;
     fs.writeFileSync(mdPath, context.markdown, 'utf8');
     console.log(chalk.green(`Markdown written to ${mdPath}`));
   }
@@ -745,9 +717,7 @@ export async function inspectSession(
   const output: string[] = [];
 
   output.push(renderHeader(session.id));
-  output.push(
-    renderSourceFiles(session, mainLines, mainSize, subagentFiles, toolResultFiles),
-  );
+  output.push(renderSourceFiles(session, mainLines, mainSize, subagentFiles, toolResultFiles));
   output.push(renderEventDistribution(events, session.source));
   if (rawMessages.length === 0 && rawEventNote) {
     output.push(chalk.gray(`  ${rawEventNote}\n`));
@@ -770,16 +740,7 @@ export async function inspectSession(
   }
 
   output.push(renderMarkdownOutput(markdownStats, presetName));
-  output.push(
-    renderConversionSummary(
-      mainSize,
-      subagentFiles,
-      toolResultFiles,
-      events,
-      markdownStats,
-      context,
-    ),
-  );
+  output.push(renderConversionSummary(mainSize, subagentFiles, toolResultFiles, events, markdownStats, context));
 
   console.log(output.join('\n'));
 }

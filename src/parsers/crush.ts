@@ -1,18 +1,13 @@
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 import { logger } from '../logger.js';
-import type {
-  ConversationMessage,
-  SessionContext,
-  SessionNotes,
-  UnifiedSession,
-} from '../types/index.js';
+import type { ConversationMessage, SessionContext, SessionNotes, UnifiedSession } from '../types/index.js';
 import type { SessionSource } from '../types/tool-names.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { cleanSummary, homeDir } from '../utils/parser-helpers.js';
-import type { VerbosityConfig } from '../config/index.js';
-import { getPreset } from '../config/index.js';
 
 // 'crush' is not yet in TOOL_NAMES — use a type assertion until registration is added.
 const CRUSH_SOURCE: SessionSource = 'crush';
@@ -170,10 +165,7 @@ export async function parseCrushSessions(): Promise<UnifiedSession[]> {
 /**
  * Extract context from a Crush session for cross-tool continuation.
  */
-export async function extractCrushContext(
-  session: UnifiedSession,
-  config?: VerbosityConfig,
-): Promise<SessionContext> {
+export async function extractCrushContext(session: UnifiedSession, config?: VerbosityConfig): Promise<SessionContext> {
   const resolvedConfig = config ?? getPreset('standard');
 
   const msgRows = querySqlite<CrushMessageRow>(

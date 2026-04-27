@@ -4,14 +4,14 @@
  * State persisted in ~/.continues/star-prompt.json.
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
-import { spawnSync } from 'child_process';
-import { SHELL_OPTION } from '../utils/platform.js';
-import chalk from 'chalk';
 import * as clack from '@clack/prompts';
+import chalk from 'chalk';
+import { spawnSync } from 'child_process';
+import { existsSync } from 'fs';
+import { mkdir, readFile, writeFile } from 'fs/promises';
+import { homedir } from 'os';
+import { join } from 'path';
+import { SHELL_OPTION } from '../utils/platform.js';
 
 const REPO = 'yigitkonur/cli-continues';
 
@@ -34,10 +34,7 @@ async function hasBeenPrompted(): Promise<boolean> {
 async function markPrompted(): Promise<void> {
   const dir = join(homedir(), '.continues');
   await mkdir(dir, { recursive: true });
-  await writeFile(
-    statePath(),
-    JSON.stringify({ prompted_at: new Date().toISOString() }, null, 2),
-  );
+  await writeFile(statePath(), JSON.stringify({ prompted_at: new Date().toISOString() }, null, 2));
 }
 
 function isGhInstalled(): boolean {

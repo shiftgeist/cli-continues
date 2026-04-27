@@ -1,17 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 import { logger } from '../logger.js';
-import type {
-  ConversationMessage,
-  SessionContext,
-  UnifiedSession,
-} from '../types/index.js';
+import type { ConversationMessage, SessionContext, UnifiedSession } from '../types/index.js';
 import { extractTextFromBlocks } from '../utils/content.js';
 import { findFiles, listSubdirectories } from '../utils/fs-helpers.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { cleanSummary, homeDir } from '../utils/parser-helpers.js';
-import type { VerbosityConfig } from '../config/index.js';
-import { getPreset } from '../config/index.js';
 
 // ── Kiro Session Shape ──────────────────────────────────────────────────────
 
@@ -35,13 +31,7 @@ interface KiroSession {
 
 // ── Base Path ───────────────────────────────────────────────────────────────
 // macOS: ~/Library/Application Support/Kiro/workspace-sessions/
-const KIRO_BASE_DIR = path.join(
-  homeDir(),
-  'Library',
-  'Application Support',
-  'Kiro',
-  'workspace-sessions',
-);
+const KIRO_BASE_DIR = path.join(homeDir(), 'Library', 'Application Support', 'Kiro', 'workspace-sessions');
 
 /**
  * Find all Kiro session JSON files.
@@ -175,9 +165,7 @@ export async function extractKiroContext(session: UnifiedSession, config?: Verbo
   const filesModified: string[] = [];
   const pendingTasks: string[] = [];
 
-  const enrichedSession = sessionData?.selectedModel
-    ? { ...session, model: sessionData.selectedModel }
-    : session;
+  const enrichedSession = sessionData?.selectedModel ? { ...session, model: sessionData.selectedModel } : session;
 
   const markdown = generateHandoffMarkdown(
     enrichedSession,

@@ -1,31 +1,30 @@
-import { adapters } from '../parsers/registry.js';
 import * as os from 'os';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
+import { adapters } from '../parsers/registry.js';
 import type {
   ConversationMessage,
+  ReasoningStep,
   SessionNotes,
   SubagentResult,
-  ReasoningStep,
-  StructuredToolSample,
   ToolSample,
   ToolUsageSummary,
   UnifiedSession,
 } from '../types/index.js';
 import {
-  SHELL_TOOLS,
-  READ_TOOLS,
-  WRITE_TOOLS,
-  EDIT_TOOLS,
-  GREP_TOOLS,
-  GLOB_TOOLS,
-  SEARCH_TOOLS,
-  FETCH_TOOLS,
-  TASK_TOOLS,
-  TASK_OUTPUT_TOOLS,
   ASK_TOOLS,
   classifyToolName,
+  EDIT_TOOLS,
+  FETCH_TOOLS,
+  GLOB_TOOLS,
+  GREP_TOOLS,
+  READ_TOOLS,
+  SEARCH_TOOLS,
+  SHELL_TOOLS,
+  TASK_OUTPUT_TOOLS,
+  TASK_TOOLS,
+  WRITE_TOOLS,
 } from '../types/tool-names.js';
-import type { VerbosityConfig } from '../config/index.js';
-import { getPreset } from '../config/index.js';
 
 /** Replace home directory prefix with ~ and escape backticks for safe markdown inline code */
 const _home = os.homedir();
@@ -648,11 +647,7 @@ function renderGlobSection(tool: ToolUsageSummary, caps: DisplayCaps): string[] 
 
 // ── Compact Renderer (Search, Fetch, Task, Ask, MCP) ────────────────────────
 
-function renderCompactSection(
-  tool: ToolUsageSummary,
-  category: string,
-  caps: DisplayCaps,
-): string[] {
+function renderCompactSection(tool: ToolUsageSummary, category: string, caps: DisplayCaps): string[] {
   const label = COMPACT_LABELS[category] || tool.name;
   const errorStr = tool.errorCount ? `, ${tool.errorCount} errors` : '';
   const lines: string[] = [`### ${label} (${tool.count} calls${errorStr})`, ''];

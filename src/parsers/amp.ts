@@ -1,5 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 import { logger } from '../logger.js';
 import type {
   ConversationMessage,
@@ -8,11 +10,9 @@ import type {
   ToolUsageSummary,
   UnifiedSession,
 } from '../types/index.js';
+import { findFiles } from '../utils/fs-helpers.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { cleanSummary, homeDir } from '../utils/parser-helpers.js';
-import { findFiles } from '../utils/fs-helpers.js';
-import type { VerbosityConfig } from '../config/index.js';
-import { getPreset } from '../config/index.js';
 import { truncate } from '../utils/tool-summarizer.js';
 
 // ── Amp Thread JSON shape ───────────────────────────────────────────────────
@@ -251,7 +251,9 @@ export async function extractAmpContext(session: UnifiedSession, config?: Verbos
         text.includes('need to')
       ) {
         // Extract the first sentence containing the keyword as the task hint
-        const sentences = extractMessageText(msg).split(/[.!\n]/).filter(Boolean);
+        const sentences = extractMessageText(msg)
+          .split(/[.!\n]/)
+          .filter(Boolean);
         for (const sentence of sentences) {
           if (pendingTasks.length >= 5) break;
           const lower = sentence.toLowerCase();

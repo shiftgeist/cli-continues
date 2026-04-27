@@ -1,18 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 import { logger } from '../logger.js';
-import type {
-  ConversationMessage,
-  SessionContext,
-  SessionNotes,
-  UnifiedSession,
-} from '../types/index.js';
+import type { ConversationMessage, SessionContext, SessionNotes, UnifiedSession } from '../types/index.js';
 import type { SessionSource } from '../types/tool-names.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { cleanSummary, homeDir } from '../utils/parser-helpers.js';
 import { truncate } from '../utils/tool-summarizer.js';
-import type { VerbosityConfig } from '../config/index.js';
-import { getPreset } from '../config/index.js';
 
 // ── Extension Configs ───────────────────────────────────────────────────────
 
@@ -242,10 +237,22 @@ function extractTokenUsage(messages: ClineRawMessage[]): SessionNotes {
 
     try {
       const meta: ApiReqMeta = JSON.parse(msg.text);
-      if (meta.tokensIn) { totalIn += meta.tokensIn; found = true; }
-      if (meta.tokensOut) { totalOut += meta.tokensOut; found = true; }
-      if (meta.cacheWrites) { totalCacheWrites += meta.cacheWrites; found = true; }
-      if (meta.cacheReads) { totalCacheReads += meta.cacheReads; found = true; }
+      if (meta.tokensIn) {
+        totalIn += meta.tokensIn;
+        found = true;
+      }
+      if (meta.tokensOut) {
+        totalOut += meta.tokensOut;
+        found = true;
+      }
+      if (meta.cacheWrites) {
+        totalCacheWrites += meta.cacheWrites;
+        found = true;
+      }
+      if (meta.cacheReads) {
+        totalCacheReads += meta.cacheReads;
+        found = true;
+      }
       if (meta.cost) totalCost += meta.cost;
     } catch {
       // Malformed JSON in api_req_started — skip silently
@@ -365,10 +372,7 @@ async function parseSessionsForSource(filterSource?: ClineSource): Promise<Unifi
  * Extract full session context for cross-tool handoff.
  * Shared implementation for all three Cline-family variants.
  */
-async function extractContextShared(
-  session: UnifiedSession,
-  config?: VerbosityConfig,
-): Promise<SessionContext> {
+async function extractContextShared(session: UnifiedSession, config?: VerbosityConfig): Promise<SessionContext> {
   const cfg = config ?? getPreset('standard');
   const messages = readUiMessages(session.originalPath);
 
@@ -419,10 +423,7 @@ export async function parseClineSessions(): Promise<UnifiedSession[]> {
 }
 
 /** Extract context from a Cline session */
-export async function extractClineContext(
-  session: UnifiedSession,
-  config?: VerbosityConfig,
-): Promise<SessionContext> {
+export async function extractClineContext(session: UnifiedSession, config?: VerbosityConfig): Promise<SessionContext> {
   return extractContextShared(session, config);
 }
 

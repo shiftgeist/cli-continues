@@ -1,13 +1,14 @@
 /**
  * `continues dump <source|all> <directory>` — bulk export sessions to files.
  */
-import * as fs from 'fs';
-import * as path from 'path';
+
 import chalk from 'chalk';
+import * as fs from 'fs';
 import ora from 'ora';
-import { getPreset, loadConfig } from '../config/index.js';
+import * as path from 'path';
 import type { VerbosityConfig } from '../config/index.js';
-import { adapters, ALL_TOOLS } from '../parsers/registry.js';
+import { getPreset, loadConfig } from '../config/index.js';
+import { ALL_TOOLS, adapters } from '../parsers/registry.js';
 import type { SessionSource, UnifiedSession } from '../types/index.js';
 import { getAllSessions, getSessionsBySource } from '../utils/index.js';
 

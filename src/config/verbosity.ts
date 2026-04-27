@@ -17,8 +17,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { z } from 'zod';
 import YAML from 'yaml';
+import { z } from 'zod';
 import { logger } from '../logger.js';
 
 // ── Zod Schema ──────────────────────────────────────────────────────────────
@@ -513,7 +513,10 @@ function parseUserConfig(raw: unknown): VerbosityConfig {
   }
 
   // Validation failed — log issues and return the base preset
-  logger.warn('Config validation errors, falling back to preset defaults:', result.error.issues.map((i) => i.message).join('; '));
+  logger.warn(
+    'Config validation errors, falling back to preset defaults:',
+    result.error.issues.map((i) => i.message).join('; '),
+  );
   return base;
 }
 

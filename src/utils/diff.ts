@@ -35,12 +35,7 @@ export function formatNewFileDiff(content: string, filePath: string, maxLines = 
  * Since we have the exact replacement strings (not full files),
  * we format them as a hunk with `-` and `+` lines.
  */
-export function formatEditDiff(
-  oldStr: string,
-  newStr: string,
-  filePath: string,
-  maxLines = 200,
-): DiffResult {
+export function formatEditDiff(oldStr: string, newStr: string, filePath: string, maxLines = 200): DiffResult {
   const header = `--- a/${filePath}\n+++ b/${filePath}`;
   const oldLines = oldStr.split('\n');
   const newLines = newStr.split('\n');

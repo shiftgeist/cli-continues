@@ -12,6 +12,4 @@ export const IS_WINDOWS = process.platform === 'win32';
 export const WHICH_CMD = IS_WINDOWS ? 'where' : 'which';
 
 /** Spread into `spawn`/`spawnSync` options to enable shell on Windows */
-export const SHELL_OPTION: { shell: boolean } | Record<string, never> = IS_WINDOWS
-  ? { shell: true }
-  : {};
+export const SHELL_OPTION: { shell: boolean } | Record<string, never> = IS_WINDOWS ? { shell: true } : {};

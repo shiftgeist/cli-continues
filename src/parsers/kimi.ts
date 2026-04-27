@@ -1,6 +1,8 @@
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { createHash } from 'crypto';
+import type { VerbosityConfig } from '../config/index.js';
+import { getPreset } from '../config/index.js';
 import { logger } from '../logger.js';
 import type {
   ConversationMessage,
@@ -9,17 +11,15 @@ import type {
   ToolUsageSummary,
   UnifiedSession,
 } from '../types/index.js';
-import type { KimiMetadata, KimiMessage } from '../types/schemas.js';
+import type { KimiMessage, KimiMetadata } from '../types/schemas.js';
 import { KimiMetadataSchema } from '../types/schemas.js';
+import { classifyToolName } from '../types/tool-names.js';
 import { extractTextFromBlocks } from '../utils/content.js';
 import { listSubdirectories } from '../utils/fs-helpers.js';
 import { readJsonlFile } from '../utils/jsonl.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { cleanSummary, homeDir, trimMessages } from '../utils/parser-helpers.js';
-import { classifyToolName } from '../types/tool-names.js';
-import type { VerbosityConfig } from '../config/index.js';
-import { getPreset } from '../config/index.js';
-import { fileSummary, mcpSummary, shellSummary, SummaryCollector, truncate } from '../utils/tool-summarizer.js';
+import { fileSummary, mcpSummary, SummaryCollector, shellSummary, truncate } from '../utils/tool-summarizer.js';
 
 const KIMI_SESSIONS_DIR = path.join(homeDir(), '.kimi', 'sessions');
 const KIMI_CONFIG_PATH = path.join(homeDir(), '.kimi', 'kimi.json');
@@ -165,7 +165,10 @@ function parseToolArgs(argsStr: string): Record<string, unknown> {
 /**
  * Extract tool usage summaries and files modified using shared SummaryCollector
  */
-function extractToolData(messages: KimiMessage[], config?: VerbosityConfig): { summaries: ToolUsageSummary[]; filesModified: string[] } {
+function extractToolData(
+  messages: KimiMessage[],
+  config?: VerbosityConfig,
+): { summaries: ToolUsageSummary[]; filesModified: string[] } {
   const collector = new SummaryCollector(config);
 
   for (const msg of messages) {
@@ -181,11 +184,11 @@ function extractToolData(messages: KimiMessage[], config?: VerbosityConfig): { s
 
       switch (category) {
         case 'write': {
-          collector.add(
-            name,
-            fileSummary('write', fp, undefined, false),
-            { data: { category: 'write', filePath: fp }, filePath: fp, isWrite: true }
-          );
+          collector.add(name, fileSummary('write', fp, undefined, false), {
+            data: { category: 'write', filePath: fp },
+            filePath: fp,
+            isWrite: true,
+          });
           break;
         }
         case 'read':
