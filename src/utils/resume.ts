@@ -167,13 +167,13 @@ export async function crossToolResume(
 
   const adapter = adapters[target];
   if (!adapter) throw new Error(`Unknown target: ${target}`);
-  const binaryName = await requireToolBinaryName(target);
 
   if (contextOptions?.debugPrompt) {
     console.log(prompt);
     return;
   }
 
+  const binaryName = await requireToolBinaryName(target);
   const resolved = resolveCrossToolForwarding(target, forwarding);
   const defaultInitArgs = getDefaultHandoffInitArgs(target, resolved.extraArgs);
   await runCommand(binaryName, [...defaultInitArgs, ...resolved.extraArgs, ...adapter.crossToolArgs(prompt, cwd)], cwd);
