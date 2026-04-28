@@ -23,8 +23,29 @@ import { mcpSummary, SummaryCollector } from '../utils/tool-summarizer.js';
 // ── Kiro Storage ────────────────────────────────────────────────────────────
 
 const KIRO_AGENT_RELATIVE_PATH = ['User', 'globalStorage', 'kiro.kiroagent', 'workspace-sessions'];
+// The user-visible warning. Mentions both possible CLI SQLite locations:
+//   - `~/Library/Application Support/kiro-cli/data.sqlite3` (verified primary CLI store, table conversations_v2)
+//   - `~/.kiro/` (older / alternate location referenced in some docs)
+// Wording stays compatible with the existing assertion (`SQLite stores under ~/.kiro/ are skipped`).
 const KIRO_FIDELITY_WARNING =
-  'Kiro fidelity warning: this parser supports IDE workspace JSON and ACP JSON/JSONL sessions; normal Kiro CLI SQLite stores under ~/.kiro/ are skipped because the exact schema is not publicly documented.';
+  'Kiro fidelity warning: this parser supports IDE workspace JSON and ACP JSON/JSONL sessions; normal Kiro CLI SQLite stores under ~/.kiro/ are skipped (and the parallel store at ~/Library/Application Support/kiro-cli/data.sqlite3) because the exact schema is not publicly documented.';
+
+// Canonical ACP `session/update` discriminator values per the agent-client-protocol schema:
+//   https://github.com/zed-industries/agent-client-protocol/blob/main/schema/schema.json
+// Verified against Kiro CLI v1.29.0 docs (kiro.dev/docs/cli/acp/) and the empirical reference at
+//   https://github.com/dwalleck/cyril/blob/main/docs/kiro-acp-protocol.md
+const ACP_SESSION_UPDATE_KEYS = ['sessionUpdate', 'type', 'kind', 'updateType', 'eventType'] as const;
+const ACP_AGENT_MESSAGE_CHUNK = new Set(['agent_message_chunk', 'AgentMessageChunk']);
+const ACP_AGENT_THOUGHT_CHUNK = new Set(['agent_thought_chunk', 'AgentThoughtChunk']);
+const ACP_USER_MESSAGE_CHUNK = new Set(['user_message_chunk', 'UserMessageChunk']);
+const ACP_TOOL_CALL = new Set(['tool_call', 'ToolCall', 'tool_call_chunk']);
+const ACP_TOOL_CALL_UPDATE = new Set(['tool_call_update', 'ToolCallUpdate']);
+const ACP_AGENT_MESSAGE = new Set(['agent_message', 'AgentMessage']);
+const ACP_USER_MESSAGE = new Set(['user_message', 'UserMessage']);
+// The canonical ACP spec has no `TurnEnd` event — turns end via the JSON-RPC response to
+// `session/prompt` with `stopReason: end_turn`. We still recognise the legacy fixture name
+// so synthesised `TurnEnd` events keep flushing accumulators harmlessly.
+const ACP_TURN_END = new Set(['turn_end', 'TurnEnd']);
 
 type KiroSurface = 'ide-workspace' | 'acp-jsonl';
 
@@ -342,7 +363,7 @@ function getAcpUpdate(record: JsonRecord): JsonRecord | undefined {
 }
 
 function getAcpRecordType(record: JsonRecord | undefined): string | undefined {
-  return getString(record, ['type', 'kind', 'updateType', 'eventType']);
+  return getString(record, ACP_SESSION_UPDATE_KEYS);
 }
 
 function extractAcpRecordText(record: JsonRecord | undefined): string {
@@ -367,34 +388,116 @@ function extractAcpTimestamp(record: JsonRecord, fallback?: JsonRecord): Date | 
   );
 }
 
+// Kiro CLI persists session history in `~/.kiro/sessions/cli/<id>.jsonl` using
+// envelope objects keyed by `AssistantMessage` / `UserMessage` / `ToolResults`,
+// not raw ACP `session/update` notifications (see kirodotdev/Kiro#6110). We
+// peel the envelope so the same parser handles both wire-protocol replay logs
+// and Kiro's persisted record format.
+const KIRO_PERSISTED_ENVELOPE_KEYS = [
+  'AssistantMessage',
+  'UserMessage',
+  'ToolResults',
+  'assistantMessage',
+  'userMessage',
+  'toolResults',
+] as const;
+
+function unwrapKiroPersistedEnvelope(
+  event: JsonRecord,
+): { kind: 'assistant' | 'user' | 'tool_results'; payload: JsonRecord } | undefined {
+  for (const key of KIRO_PERSISTED_ENVELOPE_KEYS) {
+    const value = event[key];
+    if (!isRecord(value)) continue;
+    const lowered = key.toLowerCase();
+    if (lowered === 'assistantmessage') return { kind: 'assistant', payload: value };
+    if (lowered === 'usermessage') return { kind: 'user', payload: value };
+    if (lowered === 'toolresults') return { kind: 'tool_results', payload: value };
+  }
+  return undefined;
+}
+
 function extractAcpMessages(events: readonly unknown[]): ConversationMessage[] {
   const messages: ConversationMessage[] = [];
   let pendingAssistant = '';
   let pendingAssistantTimestamp: Date | undefined;
+  let pendingUser = '';
+  let pendingUserTimestamp: Date | undefined;
+  // Track JSON-RPC `session/prompt` request ids so we can flush on the
+  // matching response (`stopReason` carries `end_turn`/`max_tokens`/`cancelled`).
+  const promptRequestIds = new Set<string>();
 
   const flushAssistant = (): void => {
-    const content = pendingAssistant.trim();
-    if (!content) {
-      pendingAssistant = '';
-      pendingAssistantTimestamp = undefined;
-      return;
-    }
-
-    messages.push({
-      role: 'assistant',
-      content,
-      timestamp: pendingAssistantTimestamp,
-    });
+    const content = pendingAssistant;
     pendingAssistant = '';
+    const timestamp = pendingAssistantTimestamp;
     pendingAssistantTimestamp = undefined;
+    if (content.trim().length === 0) return;
+    messages.push({ role: 'assistant', content: content.trim(), timestamp });
+  };
+
+  const flushUser = (): void => {
+    const content = pendingUser;
+    pendingUser = '';
+    const timestamp = pendingUserTimestamp;
+    pendingUserTimestamp = undefined;
+    if (content.trim().length === 0) return;
+    messages.push({ role: 'user', content: content.trim(), timestamp });
+  };
+
+  const isPromptResponse = (event: JsonRecord): boolean => {
+    if (typeof event.method === 'string') return false;
+    const id = event.id;
+    if (id === undefined || id === null) return false;
+    const idKey = String(id);
+    if (!promptRequestIds.has(idKey)) return false;
+    promptRequestIds.delete(idKey);
+    return true;
   };
 
   for (const event of events) {
     if (!isRecord(event)) continue;
 
+    // Kiro CLI persisted-format envelopes (`AssistantMessage`/`UserMessage`/`ToolResults`).
+    const persisted = unwrapKiroPersistedEnvelope(event);
+    if (persisted) {
+      if (persisted.kind === 'tool_results') {
+        // Tool results don't represent visible turns of conversation; surface them via
+        // tool summaries instead. Skip here.
+        continue;
+      }
+      if (persisted.kind === 'user') {
+        flushAssistant();
+        flushUser();
+        const content = extractAcpRecordText(persisted.payload).trim();
+        if (content) {
+          messages.push({
+            role: 'user',
+            content,
+            timestamp: extractAcpTimestamp(persisted.payload, event),
+          });
+        }
+        continue;
+      }
+      // assistant
+      flushAssistant();
+      flushUser();
+      const content = extractAcpRecordText(persisted.payload).trim();
+      if (content) {
+        messages.push({
+          role: 'assistant',
+          content,
+          timestamp: extractAcpTimestamp(persisted.payload, event),
+        });
+      }
+      continue;
+    }
+
     const method = getString(event, ['method']);
     if (method === 'session/prompt') {
       flushAssistant();
+      flushUser();
+      const id = event.id;
+      if (id !== undefined && id !== null) promptRequestIds.add(String(id));
       const content = extractPromptText(event);
       if (content) {
         messages.push({
@@ -406,11 +509,21 @@ function extractAcpMessages(events: readonly unknown[]): ConversationMessage[] {
       continue;
     }
 
+    // The ACP `session/prompt` JSON-RPC response (correlated to a tracked id) signals
+    // turn end via `stopReason`. Flush any streaming assistant accumulator.
+    if (isPromptResponse(event)) {
+      flushAssistant();
+      continue;
+    }
+
     const update = getAcpUpdate(event);
     if (!update) {
       const directMessage = normalizeHistoryEntry(event);
       if (directMessage) {
-        if (directMessage.role === 'user') flushAssistant();
+        if (directMessage.role === 'user') {
+          flushAssistant();
+          flushUser();
+        }
         messages.push(directMessage);
       }
       continue;
@@ -418,17 +531,36 @@ function extractAcpMessages(events: readonly unknown[]): ConversationMessage[] {
 
     const updateType = getAcpRecordType(update);
 
-    if (updateType === 'AgentMessageChunk') {
+    if (updateType && ACP_AGENT_MESSAGE_CHUNK.has(updateType)) {
       const chunk = extractAcpRecordText(update);
       if (chunk.length > 0) {
+        // Starting a new assistant turn flushes any pending streamed user prompt.
+        flushUser();
         pendingAssistant += chunk;
         pendingAssistantTimestamp ??= extractAcpTimestamp(update, event);
       }
       continue;
     }
 
-    if (updateType === 'AgentMessage') {
+    if (updateType && ACP_AGENT_THOUGHT_CHUNK.has(updateType)) {
+      // Thought chunks are extended-thinking traces, not user-visible conversation per the
+      // ACP schema. Skip them so they don't pollute the main message stream.
+      continue;
+    }
+
+    if (updateType && ACP_USER_MESSAGE_CHUNK.has(updateType)) {
+      const chunk = extractAcpRecordText(update);
+      if (chunk.length > 0) {
+        flushAssistant();
+        pendingUser += chunk;
+        pendingUserTimestamp ??= extractAcpTimestamp(update, event);
+      }
+      continue;
+    }
+
+    if (updateType && ACP_AGENT_MESSAGE.has(updateType)) {
       flushAssistant();
+      flushUser();
       const content = extractAcpRecordText(update).trim();
       if (content) {
         messages.push({
@@ -440,8 +572,9 @@ function extractAcpMessages(events: readonly unknown[]): ConversationMessage[] {
       continue;
     }
 
-    if (updateType === 'UserMessage') {
+    if (updateType && ACP_USER_MESSAGE.has(updateType)) {
       flushAssistant();
+      flushUser();
       const content = extractAcpRecordText(update).trim();
       if (content) {
         messages.push({
@@ -453,19 +586,24 @@ function extractAcpMessages(events: readonly unknown[]): ConversationMessage[] {
       continue;
     }
 
-    if (updateType === 'TurnEnd') {
+    if (updateType && ACP_TURN_END.has(updateType)) {
       flushAssistant();
+      flushUser();
       continue;
     }
 
     const directMessage = normalizeHistoryEntry(update);
     if (directMessage) {
-      if (directMessage.role === 'user') flushAssistant();
+      if (directMessage.role === 'user') {
+        flushAssistant();
+        flushUser();
+      }
       messages.push(directMessage);
     }
   }
 
   flushAssistant();
+  flushUser();
   return messages;
 }
 
@@ -485,8 +623,12 @@ function extractAcpCwd(sessionData: JsonRecord | undefined, events: readonly unk
 }
 
 function extractAcpModel(sessionData: JsonRecord | undefined, events: readonly unknown[]): string | undefined {
+  // Kiro v1.29.0 added `models.currentModelId` in `session/new`; honour it after metadata.
   const metadataModel = getString(sessionData, ['selectedModel', 'model', 'modelId']);
   if (metadataModel) return metadataModel;
+  const modelsBlock = getRecord(sessionData, ['models']);
+  const currentMetadataModel = getString(modelsBlock, ['currentModelId', 'modelId']);
+  if (currentMetadataModel) return currentMetadataModel;
 
   for (const event of events) {
     if (!isRecord(event)) continue;
@@ -494,13 +636,21 @@ function extractAcpModel(sessionData: JsonRecord | undefined, events: readonly u
     const params = getRecord(event, ['params']);
     const model = getString(params, ['model', 'modelId', 'selectedModel']);
     if (model) return model;
+
+    // Inspect `session/new` and `session/load` responses (`{result: {models: {...}}}`).
+    const result = getRecord(event, ['result']);
+    const resultModels = getRecord(result, ['models']);
+    const fromResult = getString(resultModels, ['currentModelId', 'modelId']);
+    if (fromResult) return fromResult;
   }
 
   return undefined;
 }
 
 function formatToolParams(record: JsonRecord | undefined): string {
-  const params = getRecord(record, ['params', 'parameters', 'arguments', 'input']);
+  // Canonical ACP `ToolCall.rawInput` first, then Kiro extension `parameters`,
+  // then generic `params`/`arguments`/`input` for tolerance.
+  const params = getRecord(record, ['rawInput', 'parameters', 'params', 'arguments', 'input']);
   if (!params) return '';
   try {
     return JSON.stringify(params);
@@ -508,6 +658,47 @@ function formatToolParams(record: JsonRecord | undefined): string {
     logger.debug('kiro: failed to stringify ACP tool params', err);
     return '';
   }
+}
+
+// Pull a textual representation of a tool call's output. The canonical ACP
+// `ToolCall.content[]` is a list of `ToolCallContent` discriminated by `type`
+// (`content` → ContentBlock; `diff` → diff record). Kiro additionally exposes
+// flat `output`/`rawOutput` strings/objects on `tool_call_update`.
+function extractAcpToolResult(record: JsonRecord | undefined): string {
+  if (!record) return '';
+  if (typeof record.output === 'string') return record.output;
+  if (typeof record.rawOutput === 'string') return record.rawOutput;
+  const flat = extractContent(record.output ?? record.rawOutput ?? record.result).trim();
+  if (flat) return flat;
+  const contentArray = record.content;
+  if (Array.isArray(contentArray)) {
+    const parts: string[] = [];
+    for (const item of contentArray) {
+      if (!isRecord(item)) continue;
+      const itemType = typeof item.type === 'string' ? item.type : undefined;
+      // ToolCallContent { type: "content", content: ContentBlock }
+      if (itemType === 'content') {
+        const inner = extractContent(item.content);
+        if (inner) parts.push(inner);
+        continue;
+      }
+      // ToolCallContent { type: "diff", oldText, newText, path }
+      if (itemType === 'diff') {
+        const path = typeof item.path === 'string' ? item.path : '';
+        const oldText = typeof item.oldText === 'string' ? item.oldText : '';
+        const newText = typeof item.newText === 'string' ? item.newText : '';
+        const summary = path ? `diff ${path}` : 'diff';
+        const stats = `(${oldText.length} → ${newText.length} chars)`;
+        parts.push(`${summary} ${stats}`.trim());
+        continue;
+      }
+      // Plain ContentBlock or string fallback.
+      const text = extractContent(item);
+      if (text) parts.push(text);
+    }
+    if (parts.length > 0) return parts.join('\n');
+  }
+  return '';
 }
 
 interface AcpToolInvocation {
@@ -528,13 +719,19 @@ function isFailedToolStatus(status: string | undefined): boolean {
 }
 
 function mergeAcpToolUpdate(invocation: AcpToolInvocation, update: JsonRecord): void {
+  // Canonical ACP `ToolCall.title` (preferred) or Kiro `name` extension.
   const updateToolName = getString(update, ['name', 'toolName', 'title']);
-  if (updateToolName && updateToolName !== invocation.toolName) return;
+  if (updateToolName && invocation.toolName === '__acp_pending__') {
+    invocation.toolName = updateToolName;
+  } else if (updateToolName && updateToolName !== invocation.toolName) {
+    // Mismatch — skip silently. ACP allows a `kind` change but tool identity should stay.
+    return;
+  }
 
   const params = formatToolParams(update);
   if (!invocation.params && params) invocation.params = params;
 
-  const result = extractContent(update.result ?? update.output).trim();
+  const result = extractAcpToolResult(update);
   if (result) invocation.result = result;
 
   const status = getString(update, ['status', 'state']);
@@ -548,36 +745,115 @@ function extractAcpToolSummaries(events: readonly unknown[], config?: VerbosityC
   const invocations: AcpToolInvocation[] = [];
   const invocationsById = new Map<string, AcpToolInvocation>();
 
+  const upsertToolCall = (update: JsonRecord): void => {
+    const toolCallId = getAcpToolCallId(update);
+    // Canonical ACP requires `title`; Kiro extension uses `name`. Either is acceptable.
+    const toolName = getString(update, ['name', 'toolName', 'title']);
+    const status = getString(update, ['status', 'state']);
+
+    const existing = toolCallId ? invocationsById.get(toolCallId) : undefined;
+    if (existing) {
+      // De-dupe: an early `tool_call_chunk` (kiro.dev extension) often arrives before the
+      // standard `tool_call` notification. Update the existing record rather than spawning
+      // a duplicate.
+      mergeAcpToolUpdate(existing, update);
+      return;
+    }
+    if (!toolName && !toolCallId) return;
+
+    const invocation: AcpToolInvocation = {
+      toolName: toolName ?? '__acp_pending__',
+      params: formatToolParams(update),
+      result: extractAcpToolResult(update),
+      status,
+      isError: isFailedToolStatus(status),
+    };
+    invocations.push(invocation);
+    if (toolCallId) invocationsById.set(toolCallId, invocation);
+  };
+
   for (const event of events) {
     if (!isRecord(event)) continue;
+
+    // Persisted Kiro CLI `ToolResults` envelope: surface as a generic tool call so the
+    // summary collector reports activity even when no wire-protocol notification was logged.
+    const persisted = unwrapKiroPersistedEnvelope(event);
+    if (persisted?.kind === 'tool_results') {
+      const list = Array.isArray(persisted.payload.results)
+        ? persisted.payload.results
+        : Array.isArray(persisted.payload.toolResults)
+          ? persisted.payload.toolResults
+          : Array.isArray(event.toolResults)
+            ? event.toolResults
+            : [persisted.payload];
+      for (const item of list) {
+        if (!isRecord(item)) continue;
+        const inner = isRecord(item.toolResult) ? item.toolResult : item;
+        const toolCallId = getAcpToolCallId(inner) ?? getAcpToolCallId(item);
+        const innerStatus = getString(inner, ['status', 'state']);
+        // Default a tool result to `completed` when the inner record doesn't say otherwise:
+        // the presence of a ToolResults envelope itself implies the call has finished.
+        const status = innerStatus ?? 'completed';
+        const existing = toolCallId ? invocationsById.get(toolCallId) : undefined;
+        if (existing) {
+          const result = extractAcpToolResult(inner);
+          if (result) existing.result = result;
+          existing.status = status;
+          existing.isError ||= isFailedToolStatus(status);
+          continue;
+        }
+        // Unknown call id — synthesize a record so the summary still mentions tool activity.
+        const result = extractAcpToolResult(inner);
+        const toolName = getString(inner, ['name', 'toolName', 'title']) ?? 'tool';
+        const synthetic: AcpToolInvocation = {
+          toolName,
+          params: formatToolParams(inner),
+          result,
+          status,
+          isError: isFailedToolStatus(status),
+        };
+        invocations.push(synthetic);
+        if (toolCallId) invocationsById.set(toolCallId, synthetic);
+      }
+      continue;
+    }
+    if (persisted?.kind === 'assistant') {
+      // Persisted assistant messages may carry inline `toolUse` arrays — Anthropic-style.
+      const toolUseList = Array.isArray(persisted.payload.toolUse)
+        ? persisted.payload.toolUse
+        : Array.isArray(persisted.payload.tool_use)
+          ? persisted.payload.tool_use
+          : [];
+      for (const item of toolUseList) {
+        if (!isRecord(item)) continue;
+        upsertToolCall(item);
+      }
+      continue;
+    }
+
     const update = getAcpUpdate(event);
     const updateType = getAcpRecordType(update);
     if (!update) continue;
 
-    if (updateType === 'ToolCall') {
-      const toolName = getString(update, ['name', 'toolName', 'title']);
-      if (!toolName) continue;
-
-      const status = getString(update, ['status', 'state']);
-      const invocation: AcpToolInvocation = {
-        toolName,
-        params: formatToolParams(update),
-        result: extractContent(update.result ?? update.output).trim(),
-        status,
-        isError: isFailedToolStatus(status),
-      };
-      invocations.push(invocation);
-
-      const toolCallId = getAcpToolCallId(update);
-      if (toolCallId) invocationsById.set(toolCallId, invocation);
+    if (updateType && ACP_TOOL_CALL.has(updateType)) {
+      upsertToolCall(update);
       continue;
     }
 
-    if (updateType === 'ToolCallUpdate') {
+    if (updateType && ACP_TOOL_CALL_UPDATE.has(updateType)) {
       const toolCallId = getAcpToolCallId(update);
       const invocation = toolCallId ? invocationsById.get(toolCallId) : undefined;
       if (invocation) mergeAcpToolUpdate(invocation, update);
+      else if (toolCallId) {
+        // Lone `tool_call_update` with no preceding `tool_call` — keep it but mark name unknown.
+        upsertToolCall(update);
+      }
     }
+  }
+
+  // Drop any invocation that never received a name.
+  for (let i = invocations.length - 1; i >= 0; i--) {
+    if (invocations[i].toolName === '__acp_pending__') invocations.splice(i, 1);
   }
 
   const collector = new SummaryCollector(config);

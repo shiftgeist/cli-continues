@@ -567,4 +567,405 @@ describe('kiro parser hardening', () => {
     expect(sessions[0].bytes).toBe(fs.statSync(eventPath).size);
     expect(sessions[0].originalPath).toBe(eventPath);
   });
+
+  it('parses the canonical ACP wire format (sessionUpdate snake_case via session/update)', async () => {
+    // This is the ground-truth ACP wire format Kiro CLI emits per the agent-client-protocol
+    // schema and Kiro's own ACP docs (https://kiro.dev/docs/cli/acp/, kirodotdev/Kiro). The
+    // discriminator field is `sessionUpdate` (not `type`), values are snake_case, and the
+    // method name is `session/update` (not `session/notification`).
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-parser-'));
+    tmpHomes.push(home);
+    const sessionDir = createKiroAcpSessionDir(home);
+    const metadataPath = path.join(sessionDir, 'sess_canonical.json');
+    const eventPath = path.join(sessionDir, 'sess_canonical.jsonl');
+
+    writeJson(metadataPath, {
+      id: 'sess_canonical',
+      createdAt: '2026-04-10T12:00:00.000Z',
+      updatedAt: '2026-04-10T12:01:00.000Z',
+      models: { currentModelId: 'claude-opus-4.6' },
+    });
+    writeJsonl(eventPath, [
+      {
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'session/new',
+        params: { cwd: '/Users/dev/work/canonical', mcpServers: [] },
+      },
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'session/prompt',
+        params: {
+          sessionId: 'sess_canonical',
+          content: [{ type: 'text', text: 'What does this codebase do?' }],
+        },
+      },
+      {
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_canonical',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Reads ' },
+          },
+        },
+      },
+      {
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_canonical',
+          update: {
+            sessionUpdate: 'agent_thought_chunk',
+            content: { type: 'text', text: 'INTERNAL_REASONING_DO_NOT_LEAK' },
+          },
+        },
+      },
+      {
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_canonical',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'JSONL events.' },
+          },
+        },
+      },
+      {
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_canonical',
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tc_001',
+            name: 'read',
+            status: 'in_progress',
+            rawInput: { path: 'src/parsers/kiro.ts' },
+          },
+        },
+      },
+      {
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_canonical',
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'tc_001',
+            status: 'completed',
+            output: 'fn main() { ... }',
+          },
+        },
+      },
+      // Turn end via the JSON-RPC response correlated to the prompt request id.
+      { jsonrpc: '2.0', id: 1, result: { stopReason: 'end_turn' } },
+    ]);
+
+    const { extractKiroContext, parseKiroSessions } = await loadKiroParserWithHome(home);
+    const sessions = await parseKiroSessions();
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].cwd).toBe('/Users/dev/work/canonical');
+    expect(sessions[0].model).toBe('claude-opus-4.6');
+
+    const context = await extractKiroContext(sessions[0]);
+    expect(context.recentMessages).toEqual([
+      { role: 'user', content: 'What does this codebase do?', timestamp: undefined },
+      { role: 'assistant', content: 'Reads JSONL events.', timestamp: undefined },
+    ]);
+    // Thought chunks must NOT leak into the conversation.
+    expect(JSON.stringify(context.recentMessages)).not.toContain('INTERNAL_REASONING_DO_NOT_LEAK');
+    expect(context.toolSummaries).toEqual([
+      expect.objectContaining({
+        name: 'read',
+        count: 1,
+        samples: [
+          expect.objectContaining({
+            summary: 'read({"path":"src/parsers/kiro.ts"}) → "fn main() { ... }" [completed]',
+            data: expect.objectContaining({
+              category: 'mcp',
+              toolName: 'read',
+              params: '{"path":"src/parsers/kiro.ts"}',
+              result: 'fn main() { ... }',
+            }),
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it('flushes pending assistant chunks on the matching session/prompt response stopReason', async () => {
+    // Verifies the JSON-RPC response (id-correlated, no method, has stopReason) flushes the
+    // streaming accumulator so the assistant turn ends cleanly even without a TurnEnd event.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-parser-'));
+    tmpHomes.push(home);
+    const sessionDir = createKiroAcpSessionDir(home);
+    const metadataPath = path.join(sessionDir, 'sess_stop_reason.json');
+    const eventPath = path.join(sessionDir, 'sess_stop_reason.jsonl');
+
+    writeJson(metadataPath, {
+      id: 'sess_stop_reason',
+      createdAt: '2026-04-11T01:00:00.000Z',
+      updatedAt: '2026-04-11T01:01:00.000Z',
+    });
+    writeJsonl(eventPath, [
+      {
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'session/prompt',
+        params: { sessionId: 'sess_stop_reason', content: [{ type: 'text', text: 'Hello' }] },
+      },
+      {
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_stop_reason',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Hi there.' },
+          },
+        },
+      },
+      // Response, NOT a notification — has id and result.stopReason but no method.
+      { jsonrpc: '2.0', id: 7, result: { stopReason: 'end_turn' } },
+    ]);
+
+    const { extractKiroContext, parseKiroSessions } = await loadKiroParserWithHome(home);
+    const sessions = await parseKiroSessions();
+    const context = await extractKiroContext(sessions[0]);
+
+    expect(context.recentMessages).toEqual([
+      { role: 'user', content: 'Hello', timestamp: undefined },
+      { role: 'assistant', content: 'Hi there.', timestamp: undefined },
+    ]);
+  });
+
+  it('parses Kiro CLI persisted-format JSONL (AssistantMessage, UserMessage, ToolResults envelopes)', async () => {
+    // Per kirodotdev/Kiro#6110, on-disk session JSONL contains envelope records keyed by
+    // AssistantMessage / UserMessage / ToolResults — not raw ACP wire-protocol notifications.
+    // The parser must understand both surfaces.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-parser-'));
+    tmpHomes.push(home);
+    const sessionDir = createKiroAcpSessionDir(home);
+    const metadataPath = path.join(sessionDir, 'sess_persisted.json');
+    const eventPath = path.join(sessionDir, 'sess_persisted.jsonl');
+
+    writeJson(metadataPath, {
+      id: 'sess_persisted',
+      cwd: '/Users/dev/work/persisted',
+      createdAt: '2026-04-12T01:00:00.000Z',
+      updatedAt: '2026-04-12T01:02:00.000Z',
+    });
+    writeJsonl(eventPath, [
+      {
+        UserMessage: {
+          content: [{ type: 'text', text: 'Read the parser file' }],
+        },
+      },
+      {
+        AssistantMessage: {
+          content: [{ type: 'text', text: 'Reading now.' }],
+          toolUse: [
+            {
+              toolCallId: 'tooluse_AAA',
+              name: 'read',
+              rawInput: { path: 'src/parsers/kiro.ts' },
+              status: 'in_progress',
+            },
+          ],
+        },
+      },
+      {
+        ToolResults: {
+          results: [
+            {
+              toolResult: {
+                toolCallId: 'tooluse_AAA',
+                output: 'parser source bytes',
+                status: 'completed',
+              },
+            },
+          ],
+        },
+      },
+      {
+        AssistantMessage: {
+          content: [{ type: 'text', text: 'The parser handles ACP and IDE sessions.' }],
+        },
+      },
+    ]);
+
+    const { extractKiroContext, parseKiroSessions } = await loadKiroParserWithHome(home);
+    const sessions = await parseKiroSessions();
+    const context = await extractKiroContext(sessions[0]);
+
+    expect(context.recentMessages).toEqual([
+      { role: 'user', content: 'Read the parser file', timestamp: undefined },
+      { role: 'assistant', content: 'Reading now.', timestamp: undefined },
+      {
+        role: 'assistant',
+        content: 'The parser handles ACP and IDE sessions.',
+        timestamp: undefined,
+      },
+    ]);
+    expect(context.toolSummaries).toEqual([
+      expect.objectContaining({
+        name: 'read',
+        count: 1,
+        samples: [
+          expect.objectContaining({
+            summary: 'read({"path":"src/parsers/kiro.ts"}) → "parser source bytes" [completed]',
+            data: expect.objectContaining({
+              category: 'mcp',
+              toolName: 'read',
+              result: 'parser source bytes',
+            }),
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it('accumulates user_message_chunk events into a streamed user prompt', async () => {
+    // ACP supports `user_message_chunk` for streamed user input. The parser must accumulate
+    // the chunks and flush them when a turn boundary or assistant response arrives.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-parser-'));
+    tmpHomes.push(home);
+    const sessionDir = createKiroAcpSessionDir(home);
+    const metadataPath = path.join(sessionDir, 'sess_user_chunks.json');
+    const eventPath = path.join(sessionDir, 'sess_user_chunks.jsonl');
+
+    writeJson(metadataPath, {
+      id: 'sess_user_chunks',
+      createdAt: '2026-04-13T00:00:00.000Z',
+      updatedAt: '2026-04-13T00:01:00.000Z',
+    });
+    writeJsonl(eventPath, [
+      {
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_user_chunks',
+          update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Could you ' } },
+        },
+      },
+      {
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_user_chunks',
+          update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'review the diff?' } },
+        },
+      },
+      {
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_user_chunks',
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Sure.' } },
+        },
+      },
+    ]);
+
+    const { extractKiroContext, parseKiroSessions } = await loadKiroParserWithHome(home);
+    const sessions = await parseKiroSessions();
+    const context = await extractKiroContext(sessions[0]);
+
+    expect(context.recentMessages).toEqual([
+      { role: 'user', content: 'Could you review the diff?', timestamp: undefined },
+      { role: 'assistant', content: 'Sure.', timestamp: undefined },
+    ]);
+  });
+
+  it('extracts tool output from canonical ACP ToolCall content[] (ToolCallContent blocks)', async () => {
+    // The canonical ACP ToolCall puts results in a `content[]` array of ToolCallContent
+    // (`{ type: "content", content: ContentBlock }` or `{ type: "diff", ... }`). Verify the
+    // parser pulls text from these structured blocks even when no flat `output` is present.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-parser-'));
+    tmpHomes.push(home);
+    const sessionDir = createKiroAcpSessionDir(home);
+    const metadataPath = path.join(sessionDir, 'sess_canonical_tool.json');
+    const eventPath = path.join(sessionDir, 'sess_canonical_tool.jsonl');
+
+    writeJson(metadataPath, {
+      id: 'sess_canonical_tool',
+      createdAt: '2026-04-14T00:00:00.000Z',
+      updatedAt: '2026-04-14T00:01:00.000Z',
+    });
+    writeJsonl(eventPath, [
+      {
+        method: 'session/prompt',
+        params: { sessionId: 'sess_canonical_tool', content: [{ type: 'text', text: 'List files' }] },
+      },
+      {
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_canonical_tool',
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tc_99',
+            title: 'ls',
+            status: 'in_progress',
+            rawInput: { path: '.' },
+          },
+        },
+      },
+      {
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_canonical_tool',
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'tc_99',
+            status: 'completed',
+            content: [{ type: 'content', content: { type: 'text', text: 'README.md\nsrc/' } }],
+          },
+        },
+      },
+    ]);
+
+    const { extractKiroContext, parseKiroSessions } = await loadKiroParserWithHome(home);
+    const sessions = await parseKiroSessions();
+    const context = await extractKiroContext(sessions[0]);
+
+    expect(context.toolSummaries).toEqual([
+      expect.objectContaining({
+        name: 'ls',
+        count: 1,
+        samples: [
+          expect.objectContaining({
+            data: expect.objectContaining({
+              toolName: 'ls',
+              result: 'README.md\nsrc/',
+            }),
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it('keeps Kiro fidelity warning visible across notes, timeline, and rendered markdown', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-parser-'));
+    tmpHomes.push(home);
+    const workspaceDir = createKiroWorkspace(home, '/tmp/warning-surfaces');
+    writeJson(path.join(workspaceDir, 'session-warning.json'), {
+      sessionId: 'session-warning',
+      title: 'Warning surfaces',
+      history: [{ role: 'human', content: 'verify warning rendering' }],
+    });
+
+    const { extractKiroContext, parseKiroSessions } = await loadKiroParserWithHome(home);
+    const sessions = await parseKiroSessions();
+    const context = await extractKiroContext(sessions[0]);
+
+    expect(context.sessionNotes?.fidelityWarnings?.[0]).toContain('Kiro fidelity warning');
+    const timeline = context.timeline ?? [];
+    const lastTimelineEntry = timeline[timeline.length - 1];
+    expect(lastTimelineEntry).toMatchObject({
+      kind: 'warning',
+      content: expect.stringContaining('Kiro fidelity warning'),
+    });
+    expect(context.markdown).toContain('Kiro fidelity warning');
+  });
 });
