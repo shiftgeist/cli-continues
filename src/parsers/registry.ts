@@ -905,9 +905,15 @@ register({
 register({
   name: 'qwen-code',
   label: 'Qwen Code',
+  // Upstream Qwen Code (packages/core/src/config/storage.ts: Storage.getRuntimeBaseDir)
+  // resolves the runtime base via QWEN_RUNTIME_DIR before falling back to
+  // ~/.qwen, then writes chats under <runtime-base>/projects/<sanitized-cwd>/chats/.
+  // QWEN_HOME is a continues-side override kept for fixtures and sandboxed installs;
+  // both must invalidate the index cache when changed.
   color: chalk.hex('#6366F1'),
-  storagePath: '~/.qwen/projects/*/chats/',
-  envVar: 'QWEN_HOME',
+  storagePath: '$QWEN_RUNTIME_DIR/projects/*/chats/ (default: ~/.qwen/projects/*/chats/)',
+  envVar: 'QWEN_RUNTIME_DIR',
+  extraEnvVars: ['QWEN_HOME'],
   binaryName: 'qwen',
   parseSessions: parseQwenCodeSessions,
   extractContext: extractQwenCodeContext,
