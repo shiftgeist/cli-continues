@@ -137,7 +137,16 @@ describe('env fingerprint cache invalidation (issue #18)', () => {
   it('kilo-code adapter declares DB and storage env vars for cache fingerprints', () => {
     expect(adapters['kilo-code'].envVar).toBe('KILO_DB');
     expect(adapters['kilo-code'].extraEnvVars).toEqual(
-      expect.arrayContaining(['XDG_DATA_HOME', 'LOCALAPPDATA', 'APPDATA']),
+      expect.arrayContaining(['XDG_DATA_HOME', 'LOCALAPPDATA', 'APPDATA', 'KILO_CODE_STORAGE_PATH']),
+    );
+  });
+
+  it('Cline-family adapters declare custom storage env vars for cache fingerprints', () => {
+    expect(adapters.cline.envVar).toBe('CLINE_STORAGE_PATH');
+    expect(adapters.cline.extraEnvVars).toEqual(expect.arrayContaining(['CONTINUES_CLINE_STORAGE_PATH']));
+    expect(adapters['roo-code'].envVar).toBe('ROO_CODE_STORAGE_PATH');
+    expect(adapters['roo-code'].extraEnvVars).toEqual(
+      expect.arrayContaining(['ROO_CLINE_STORAGE_PATH', 'CONTINUES_ROO_CODE_STORAGE_PATH']),
     );
   });
 
@@ -155,6 +164,22 @@ describe('env fingerprint cache invalidation (issue #18)', () => {
     vi.stubEnv('XDG_DATA_HOME', '/home/user/.local-data-work');
 
     expect(indexNeedsRebuild('kilo-code')).toBe(true);
+  });
+
+  it('source-scoped Roo Code cache rebuilds when custom storage env vars change', () => {
+    writeIndex(currentFingerprint('roo-code'), [makeSession('sess-1', 'roo-code')], 'roo-code');
+
+    vi.stubEnv('ROO_CODE_STORAGE_PATH', '/home/user/.roo-code-work');
+
+    expect(indexNeedsRebuild('roo-code')).toBe(true);
+  });
+
+  it('source-scoped Cline cache rebuilds when custom storage env vars change', () => {
+    writeIndex(currentFingerprint('cline'), [makeSession('sess-1', 'cline')], 'cline');
+
+    vi.stubEnv('CLINE_STORAGE_PATH', '/home/user/.cline-work');
+
+    expect(indexNeedsRebuild('cline')).toBe(true);
   });
 
   it('loadIndex skips the fingerprint line and returns only sessions', () => {

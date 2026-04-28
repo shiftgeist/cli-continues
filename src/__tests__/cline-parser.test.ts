@@ -40,6 +40,16 @@ function globalStorageBase(home: string): string {
   return path.join(home, '.config', 'Code', 'User', 'globalStorage');
 }
 
+function remoteGlobalStorageBase(home: string): string {
+  return path.join(home, '.vscode-server', 'data', 'User', 'globalStorage');
+}
+
+function writeUserSettings(home: string, settings: Record<string, unknown>): void {
+  const settingsPath = path.join(path.dirname(globalStorageBase(home)), 'settings.json');
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
+}
+
 function clineCliTasksRoot(clineDir: string): string {
   return path.join(clineDir, 'data', 'tasks');
 }
@@ -122,6 +132,10 @@ function writeRawTaskAtRoot(tasksRoot: string, taskId: string, content: string):
   return filePath;
 }
 
+function writeCustomStorageTask(customRoot: string, taskId: string, messages: unknown[]): string {
+  return writeTaskAtRoot(path.join(customRoot, 'tasks'), taskId, messages);
+}
+
 function extensionTasksRoot(home: string, extensionId: string): string {
   return path.join(globalStorageBase(home), extensionId, 'tasks');
 }
@@ -140,7 +154,8 @@ function taskDirFor(originalPath: string): string {
 
 function writeCompanion(originalPath: string, fileName: string, content: unknown): string {
   const filePath = path.join(taskDirFor(originalPath), fileName);
-  fs.writeFileSync(filePath, JSON.stringify(content, null, 2), 'utf8');
+  const serialized = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+  fs.writeFileSync(filePath, serialized, 'utf8');
   return filePath;
 }
 
@@ -375,6 +390,38 @@ describe('Cline-family parser hardening', () => {
     expect(kiloSessions[0].originalPath).toContain('kilocode.kilo-code');
   });
 
+  it('discovers Roo Code sessions from remote server and custom storage roots', async () => {
+    const home = makeHome();
+    const settingsRoot = path.join(home, 'roo-settings-storage');
+    const envRoot = path.join(home, 'roo-env-storage');
+    vi.stubEnv('ROO_CODE_STORAGE_PATH', envRoot);
+    writeUserSettings(home, { 'roo-cline.customStoragePath': settingsRoot });
+
+    const remotePath = writeTaskAtRoot(
+      path.join(remoteGlobalStorageBase(home), 'rooveterinaryinc.roo-cline', 'tasks'),
+      'remote-roo-task',
+      [{ ts: 1770000004000, type: 'say', say: 'task', text: 'Harden Roo remote storage discovery' }],
+    );
+    const settingsPath = writeCustomStorageTask(settingsRoot, 'settings-roo-task', [
+      { ts: 1770000005000, type: 'say', say: 'task', text: 'Load the custom Roo storage task' },
+    ]);
+    const envPath = writeCustomStorageTask(envRoot, 'env-roo-task', [
+      { ts: 1770000006000, type: 'say', say: 'task', text: 'Load the env Roo storage task' },
+    ]);
+
+    const { parseRooCodeSessions } = await loadClineParser(home);
+    const sessions = await parseRooCodeSessions();
+
+    expect(sessions.map((session) => session.id).sort()).toEqual([
+      'env-roo-task',
+      'remote-roo-task',
+      'settings-roo-task',
+    ]);
+    expect(sessions.find((session) => session.id === 'remote-roo-task')?.originalPath).toBe(remotePath);
+    expect(sessions.find((session) => session.id === 'settings-roo-task')?.originalPath).toBe(settingsPath);
+    expect(sessions.find((session) => session.id === 'env-roo-task')?.originalPath).toBe(envPath);
+  });
+
   it('discovers and extracts Kilo Code sessions from XDG kilo.db storage while preserving legacy task support', async () => {
     const home = makeHome();
     const xdgDataHome = path.join(home, '.xdg-data');
@@ -571,8 +618,13 @@ describe('Cline-family parser hardening', () => {
       // `api_req_finished` carries running cumulative totals, so summing both
       // would double count. The malformed `api_req_started` ('not json') is
       // skipped, leaving the single valid event at ts=1770000202000.
-      expect(context.sessionNotes?.tokenUsage).toEqual({ input: 10, output: 0 });
-      expect(context.sessionNotes?.cacheTokens).toEqual({ creation: 2, read: 3 });
+      if (source === 'roo-code') {
+        expect(context.sessionNotes?.tokenUsage).toEqual({ input: 7, output: 8 });
+        expect(context.sessionNotes?.cacheTokens).toEqual({ creation: 1, read: 4 });
+      } else {
+        expect(context.sessionNotes?.tokenUsage).toEqual({ input: 10, output: 0 });
+        expect(context.sessionNotes?.cacheTokens).toEqual({ creation: 2, read: 3 });
+      }
       expect(context.sessionNotes?.reasoning).toEqual([
         'Need to cover malformed messages, streaming finalization, and all source variants.',
       ]);
@@ -641,6 +693,131 @@ describe('Cline-family parser hardening', () => {
     expect(context.filesModified).toEqual(['src/parsers/cline.ts']);
     expect(context.sessionNotes?.tokenUsage).toEqual({ input: 100, output: 20 });
     expect(context.sessionNotes?.cacheTokens).toEqual({ creation: 0, read: 30 });
+  });
+
+  it('extracts Roo history_item metadata, tool activity, and edited metadata files', async () => {
+    const home = makeHome();
+    const originalPath = writeTask(home, 'rooveterinaryinc.roo-cline', 'api-rich-roo-task', [
+      { ts: 1770000300000, type: 'say', say: 'task', text: 'Add an auth guard' },
+      { ts: 1770000301000, type: 'say', say: 'text', text: 'I will update the guard and tests.' },
+    ]);
+    writeCompanion(originalPath, 'api_conversation_history.json', [
+      { role: 'user', content: 'Add an auth guard', ts: 1770000300000 },
+      {
+        role: 'assistant',
+        ts: 1770000301000,
+        content: [
+          { type: 'text', text: 'I will edit the auth guard.' },
+          {
+            type: 'tool_use',
+            id: 'toolu_write_1',
+            name: 'write_to_file',
+            input: { path: 'src/auth.ts', content: 'export const ok = true;' },
+          },
+        ],
+      },
+      {
+        role: 'user',
+        ts: 1770000302000,
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_write_1', content: 'File written successfully.' }],
+      },
+      {
+        role: 'assistant',
+        ts: 1770000303000,
+        content: [
+          { type: 'tool_use', id: 'toolu_shell_1', name: 'execute_command', input: { command: 'pnpm test -- auth' } },
+        ],
+      },
+      {
+        role: 'user',
+        ts: 1770000304000,
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_shell_1', content: 'exit code: 0' }],
+      },
+    ]);
+    writeCompanion(originalPath, 'task_metadata.json', {
+      files_in_context: [
+        {
+          path: 'src/auth.ts',
+          record_source: 'cline_edited',
+          cline_edit_date: 1770000302000,
+        },
+      ],
+      model_usage: [{ ts: 1770000300000, model_id: 'claude-sonnet-4-5', model_provider_id: 'anthropic', mode: 'code' }],
+      environment_history: [],
+    });
+    writeCompanion(originalPath, 'history_item.json', {
+      id: 'api-rich-roo-task',
+      ts: 1770000304000,
+      task: 'Add an auth guard',
+      tokensIn: 123,
+      tokensOut: 45,
+      cacheWrites: 6,
+      cacheReads: 7,
+      workspace: '/workspaces/app',
+      mode: 'code',
+    });
+
+    const { parseRooCodeSessions, extractRooCodeContext } = await loadClineParser(home);
+    const parsedSession = (await parseRooCodeSessions()).find((session) => session.id === 'api-rich-roo-task');
+    const context = await extractRooCodeContext(parsedSession!);
+
+    expect(parsedSession).toMatchObject({
+      cwd: '/workspaces/app',
+      model: 'claude-sonnet-4-5',
+      summary: 'Add an auth guard',
+    });
+    expect(context.sessionNotes?.tokenUsage).toEqual({ input: 123, output: 45 });
+    expect(context.sessionNotes?.cacheTokens).toEqual({ creation: 6, read: 7 });
+    expect(context.filesModified).toEqual(['src/auth.ts']);
+    expect(context.toolSummaries.find((summary) => summary.name === 'write_to_file')?.samples[0].summary).toContain(
+      'src/auth.ts',
+    );
+    expect(context.toolSummaries.find((summary) => summary.name === 'execute_command')?.samples[0].summary).toContain(
+      'pnpm test -- auth',
+    );
+    expect(context.sessionNotes?.sourceMetadata).toMatchObject({
+      apiConversationMessages: 5,
+      taskMetadata: { filesInContext: 1, modelUsage: 1 },
+      historyItem: { mode: 'code' },
+    });
+  });
+
+  it('extracts Roo JSON UI tool records before XML fallback', async () => {
+    const home = makeHome();
+    const originalPath = writeTask(home, 'rooveterinaryinc.roo-cline', 'json-ui-tool-roo-task', [
+      { ts: 1770000350000, type: 'say', say: 'task', text: 'Summarize JSON UI tools' },
+      {
+        ts: 1770000351000,
+        type: 'ask',
+        ask: 'tool',
+        text: JSON.stringify({
+          tool: 'editedExistingFile',
+          path: 'src/a.ts',
+          content: '<read_file><path>wrong.ts</path></read_file>',
+        }),
+      },
+      {
+        ts: 1770000352000,
+        type: 'say',
+        say: 'tool',
+        text: JSON.stringify({ tool: 'appliedDiff', path: 'src/b.ts' }),
+      },
+    ]);
+
+    const { extractRooCodeContext } = await loadClineParser(home);
+    const context = await extractRooCodeContext(sessionFor('roo-code', originalPath, 'json-ui-tool-roo-task'));
+
+    expect(context.toolSummaries.find((item) => item.name === 'ui:editedExistingFile')?.samples[0].summary).toBe(
+      'requested editedExistingFile src/a.ts',
+    );
+    expect(context.toolSummaries.find((item) => item.name === 'ui:appliedDiff')?.samples[0].summary).toBe(
+      'requested appliedDiff src/b.ts',
+    );
+    expect(context.toolSummaries.find((item) => item.name === 'ui:read_file')).toBeUndefined();
+    expect(context.filesModified).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(context.sessionNotes?.fidelityWarnings).toContain(
+      'UI-only tool records are approval/status records; tool results may be incomplete.',
+    );
   });
 
   it('recovers Cline cwd, model, and usage from task metadata and state task history without double counting', async () => {

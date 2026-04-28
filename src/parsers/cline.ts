@@ -34,19 +34,47 @@ const require = createRequire(import.meta.url);
  * Each entry maps a VS Code extension ID to the source label used in UnifiedSession.
  */
 const CLINE_EXTENSIONS = [
-  { id: 'saoudrizwan.claude-dev', source: 'cline' },
-  { id: 'rooveterinaryinc.roo-cline', source: 'roo-code' },
-  { id: 'roo-code.roo-cline', source: 'roo-code' },
-  { id: 'kilocode.kilo-code', source: 'kilo-code' },
+  {
+    id: 'saoudrizwan.claude-dev',
+    source: 'cline',
+    customStorageSettingKeys: ['cline.customStoragePath'],
+    customStorageEnvKeys: ['CLINE_STORAGE_PATH', 'CONTINUES_CLINE_STORAGE_PATH'],
+  },
+  {
+    id: 'rooveterinaryinc.roo-cline',
+    source: 'roo-code',
+    customStorageSettingKeys: ['roo-cline.customStoragePath'],
+    customStorageEnvKeys: ['ROO_CODE_STORAGE_PATH', 'ROO_CLINE_STORAGE_PATH', 'CONTINUES_ROO_CODE_STORAGE_PATH'],
+  },
+  {
+    id: 'roo-code.roo-cline',
+    source: 'roo-code',
+    customStorageSettingKeys: [],
+    customStorageEnvKeys: [],
+  },
+  {
+    id: 'kilocode.kilo-code',
+    source: 'kilo-code',
+    customStorageSettingKeys: ['kilo-code.customStoragePath'],
+    customStorageEnvKeys: ['KILO_CODE_STORAGE_PATH', 'CONTINUES_KILO_CODE_STORAGE_PATH'],
+  },
 ] as const;
 
 type ClineSource = (typeof CLINE_EXTENSIONS)[number]['source'];
+type ClineExtension = (typeof CLINE_EXTENSIONS)[number];
 
 const UI_MESSAGES_FILE = 'ui_messages.json';
 const API_CONVERSATION_HISTORY_FILE = 'api_conversation_history.json';
 const TASK_METADATA_FILE = 'task_metadata.json';
 const TASK_HISTORY_FILE = 'taskHistory.json';
-const TASK_SIGNAL_FILES = [UI_MESSAGES_FILE, API_CONVERSATION_HISTORY_FILE, TASK_METADATA_FILE] as const;
+const HISTORY_ITEM_FILE = 'history_item.json';
+const HISTORY_INDEX_FILE = '_index.json';
+const TASK_SIGNAL_FILES = [
+  UI_MESSAGES_FILE,
+  API_CONVERSATION_HISTORY_FILE,
+  TASK_METADATA_FILE,
+  HISTORY_ITEM_FILE,
+] as const;
 
 // ── Raw Message Shape ───────────────────────────────────────────────────────
 
@@ -118,7 +146,11 @@ interface ClineTaskHistoryItem {
   cacheWrites?: number;
   cacheReads?: number;
   cwdOnTaskInitialization?: string;
+  workspace?: string;
   modelId?: string;
+  mode?: string;
+  status?: string;
+  apiConfigName?: string;
 }
 
 interface TaskRoot {
@@ -142,6 +174,7 @@ interface TaskFiles {
   uiMessages: string;
   apiConversationHistory: string;
   taskMetadata: string;
+  historyItem: string;
   taskHistoryCandidates: string[];
 }
 
@@ -168,6 +201,7 @@ interface ToolResultEntry {
 interface ToolData {
   summaries: ToolUsageSummary[];
   filesModified: string[];
+  fidelityWarnings: string[];
 }
 
 interface SqlitePreparedStatement {
@@ -232,7 +266,14 @@ function getGlobalStorageBases(): string[] {
     );
   }
 
-  return bases;
+  bases.push(
+    path.join(home, '.vscode-server', 'data', 'User', 'globalStorage'),
+    path.join(home, '.vscode-server-insiders', 'data', 'User', 'globalStorage'),
+    path.join(home, '.cursor-server', 'data', 'User', 'globalStorage'),
+    path.join(home, '.cursor-server-insiders', 'data', 'User', 'globalStorage'),
+  );
+
+  return uniquePaths(bases);
 }
 
 function getJetBrainsRoots(): string[] {
@@ -272,6 +313,105 @@ function uniquePaths(paths: string[]): string[] {
     results.push(resolved);
   }
   return results;
+}
+
+function settingsPathForGlobalStorage(base: string): string {
+  return path.join(path.dirname(base), 'settings.json');
+}
+
+function expandHomePath(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed === '~') return homeDir();
+  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) {
+    return path.join(homeDir(), trimmed.slice(2));
+  }
+  return trimmed;
+}
+
+function stripJsonComments(content: string): string {
+  let result = '';
+  let inString = false;
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i];
+    const next = content[i + 1];
+
+    if (inLineComment) {
+      if (char === '\n' || char === '\r') {
+        inLineComment = false;
+        result += char;
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === '*' && next === '/') {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (!inString && char === '/' && next === '/') {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+
+    if (!inString && char === '/' && next === '*') {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+
+    result += char;
+
+    if (escaped) {
+      escaped = false;
+    } else if (char === '\\' && inString) {
+      escaped = true;
+    } else if (char === '"') {
+      inString = !inString;
+    }
+  }
+
+  return result.replace(/,\s*([}\]])/gu, '$1');
+}
+
+async function readSettings(settingsPath: string): Promise<Record<string, unknown>> {
+  try {
+    const parsed: unknown = JSON.parse(stripJsonComments(await fs.readFile(settingsPath, 'utf8')));
+    return isRecord(parsed) ? parsed : {};
+  } catch (err) {
+    logger.debug(`cline: cannot read settings ${settingsPath}`, err);
+    return {};
+  }
+}
+
+async function discoverCustomStorageRoots(ext: ClineExtension, globalStorageBases: string[]): Promise<string[]> {
+  const roots: string[] = [];
+  const addRoot = (value: string): void => {
+    const expanded = expandHomePath(value);
+    if (path.isAbsolute(expanded)) roots.push(expanded);
+  };
+
+  for (const envKey of ext.customStorageEnvKeys) {
+    const value = process.env[envKey];
+    if (value) addRoot(value);
+  }
+
+  for (const base of globalStorageBases) {
+    const settings = await readSettings(settingsPathForGlobalStorage(base));
+    for (const settingKey of ext.customStorageSettingKeys) {
+      const value = readString(settings, settingKey);
+      if (value) addRoot(value);
+    }
+  }
+
+  return uniquePaths(roots);
 }
 
 async function findDirsNamed(root: string, dirName: string, maxDepth: number): Promise<string[]> {
@@ -337,6 +477,17 @@ async function getTaskRoots(filterSource?: ClineSource): Promise<TaskRoot[]> {
     for (const ext of CLINE_EXTENSIONS) {
       if (filterSource && ext.source !== filterSource) continue;
       const storageRoot = path.join(base, ext.id);
+      roots.push({
+        tasksRoot: path.join(storageRoot, 'tasks'),
+        storageRoot,
+        source: ext.source,
+      });
+    }
+  }
+
+  for (const ext of CLINE_EXTENSIONS) {
+    if (filterSource && ext.source !== filterSource) continue;
+    for (const storageRoot of await discoverCustomStorageRoots(ext, globalStorageBases)) {
       roots.push({
         tasksRoot: path.join(storageRoot, 'tasks'),
         storageRoot,
@@ -664,8 +815,12 @@ function normalizeTaskHistoryItem(value: unknown): ClineTaskHistoryItem | null {
     tokensOut: readNumber(value, 'tokensOut'),
     cacheWrites: readNumber(value, 'cacheWrites'),
     cacheReads: readNumber(value, 'cacheReads'),
-    cwdOnTaskInitialization: readString(value, 'cwdOnTaskInitialization'),
+    cwdOnTaskInitialization: readString(value, 'cwdOnTaskInitialization') ?? readString(value, 'workspace'),
+    workspace: readString(value, 'workspace'),
     modelId: readString(value, 'modelId'),
+    mode: readString(value, 'mode'),
+    status: readString(value, 'status'),
+    apiConfigName: readString(value, 'apiConfigName'),
   };
 }
 
@@ -729,7 +884,7 @@ async function readTaskMetadata(filePath: string): Promise<ReadResult<ClineTaskM
 function taskHistoryArray(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   if (isRecord(value)) {
-    const taskHistory = value.taskHistory ?? value.history ?? value.items;
+    const taskHistory = value.taskHistory ?? value.history ?? value.items ?? value.entries;
     if (Array.isArray(taskHistory)) return taskHistory;
   }
   return [];
@@ -753,6 +908,21 @@ async function readTaskHistoryMap(paths: string[]): Promise<TaskHistoryReadResul
   return { map: itemsById, warnings };
 }
 
+async function readTaskHistoryItemFile(
+  filePath: string,
+  taskId: string,
+): Promise<{ item?: ClineTaskHistoryItem; warning?: string }> {
+  const { parsed, warning } = await readJson(filePath, HISTORY_ITEM_FILE);
+  if (warning) return { warning };
+  if (parsed === undefined) return {};
+
+  const item = normalizeTaskHistoryItem(parsed);
+  if (!item) {
+    return { warning: `${HISTORY_ITEM_FILE} had unexpected shape (expected JSON object)` };
+  }
+  return item.id === taskId ? { item } : {};
+}
+
 async function readTaskHistoryItem(
   paths: string[],
   taskId: string,
@@ -762,7 +932,12 @@ async function readTaskHistoryItem(
 }
 
 function taskHistoryCandidatesFromStorageRoot(storageRoot: string): string[] {
-  return [path.join(storageRoot, 'state', TASK_HISTORY_FILE), path.join(storageRoot, TASK_HISTORY_FILE)];
+  return [
+    path.join(storageRoot, 'state', TASK_HISTORY_FILE),
+    path.join(storageRoot, TASK_HISTORY_FILE),
+    path.join(storageRoot, 'tasks', HISTORY_INDEX_FILE),
+    path.join(storageRoot, HISTORY_INDEX_FILE),
+  ];
 }
 
 function taskFilesFromDir(taskDir: string, storageRoot: string): TaskFiles {
@@ -772,6 +947,7 @@ function taskFilesFromDir(taskDir: string, storageRoot: string): TaskFiles {
     uiMessages: path.join(taskDir, UI_MESSAGES_FILE),
     apiConversationHistory: path.join(taskDir, API_CONVERSATION_HISTORY_FILE),
     taskMetadata: path.join(taskDir, TASK_METADATA_FILE),
+    historyItem: path.join(taskDir, HISTORY_ITEM_FILE),
     taskHistoryCandidates: taskHistoryCandidatesFromStorageRoot(storageRoot),
   };
 }
@@ -792,10 +968,11 @@ async function loadTaskData(
   cachedHistory?: TaskHistoryReadResult,
 ): Promise<LoadedTaskData> {
   const files = taskFilesFromDir(taskDir, storageRoot);
-  const [uiResult, apiResult, metadataResult, historyResult] = await Promise.all([
+  const [uiResult, apiResult, metadataResult, perTaskHistoryResult, historyResult] = await Promise.all([
     readUiMessages(files.uiMessages),
     readApiConversationHistory(files.apiConversationHistory),
     readTaskMetadata(files.taskMetadata),
+    readTaskHistoryItemFile(files.historyItem, taskId),
     cachedHistory
       ? Promise.resolve({ item: cachedHistory.map.get(taskId), warnings: cachedHistory.warnings })
       : readTaskHistoryItem(files.taskHistoryCandidates, taskId),
@@ -805,6 +982,7 @@ async function loadTaskData(
   if (uiResult.warning) fidelityWarnings.push(uiResult.warning);
   if (apiResult.warning) fidelityWarnings.push(apiResult.warning);
   if (metadataResult.warning) fidelityWarnings.push(metadataResult.warning);
+  if (perTaskHistoryResult.warning) fidelityWarnings.push(perTaskHistoryResult.warning);
   // taskHistory warnings are de-duplicated because the cached result may be
   // shared across sibling tasks under the same storage root.
   for (const warning of historyResult.warnings) {
@@ -816,7 +994,7 @@ async function loadTaskData(
     uiMessages: uiResult.value,
     apiMessages: apiResult.value,
     taskMetadata: metadataResult.value,
-    taskHistoryItem: historyResult.item,
+    taskHistoryItem: perTaskHistoryResult.item ?? historyResult.item,
     fidelityWarnings,
   };
 }
@@ -1498,6 +1676,78 @@ function extractTokenUsage(messages: ClineRawMessage[]): SessionNotes {
   return notes;
 }
 
+function extractRooTokenUsage(messages: ClineRawMessage[]): SessionNotes {
+  const notes: SessionNotes = {};
+  let incIn = 0;
+  let incOut = 0;
+  let incCacheWrites = 0;
+  let incCacheReads = 0;
+  let cumIn: number | undefined;
+  let cumOut: number | undefined;
+  let cumCacheWrites: number | undefined;
+  let cumCacheReads: number | undefined;
+  let foundIncremental = false;
+  const trackMax = (current: number | undefined, next: number): number =>
+    current === undefined ? next : Math.max(current, next);
+
+  for (const msg of messages) {
+    if (msg.type !== 'say' || (msg.say !== 'api_req_started' && msg.say !== 'api_req_finished')) continue;
+    if (!msg.text) continue;
+
+    try {
+      const parsed: unknown = JSON.parse(msg.text);
+      if (!isRecord(parsed)) continue;
+
+      const totalTokensIn = readNumber(parsed, 'totalTokensIn');
+      const totalTokensOut = readNumber(parsed, 'totalTokensOut');
+      const totalCacheWrites = readNumber(parsed, 'totalCacheWrites');
+      const totalCacheReads = readNumber(parsed, 'totalCacheReads');
+      if (totalTokensIn !== undefined) cumIn = trackMax(cumIn, totalTokensIn);
+      if (totalTokensOut !== undefined) cumOut = trackMax(cumOut, totalTokensOut);
+      if (totalCacheWrites !== undefined) cumCacheWrites = trackMax(cumCacheWrites, totalCacheWrites);
+      if (totalCacheReads !== undefined) cumCacheReads = trackMax(cumCacheReads, totalCacheReads);
+
+      const tokensIn = readNumber(parsed, 'tokensIn');
+      const tokensOut = readNumber(parsed, 'tokensOut');
+      const cacheWrites = readNumber(parsed, 'cacheWrites');
+      const cacheReads = readNumber(parsed, 'cacheReads');
+      if (tokensIn !== undefined) {
+        incIn += tokensIn;
+        foundIncremental = true;
+      }
+      if (tokensOut !== undefined) {
+        incOut += tokensOut;
+        foundIncremental = true;
+      }
+      if (cacheWrites !== undefined) {
+        incCacheWrites += cacheWrites;
+        foundIncremental = true;
+      }
+      if (cacheReads !== undefined) {
+        incCacheReads += cacheReads;
+        foundIncremental = true;
+      }
+    } catch (err) {
+      logger.debug('cline: skipping malformed Roo API request metadata', err);
+    }
+  }
+
+  const hasCumulative = cumIn !== undefined || cumOut !== undefined;
+  if (hasCumulative) {
+    notes.tokenUsage = { input: cumIn ?? 0, output: cumOut ?? 0 };
+  } else if (foundIncremental) {
+    notes.tokenUsage = { input: incIn, output: incOut };
+  }
+
+  const cacheCreation = cumCacheWrites ?? incCacheWrites;
+  const cacheRead = cumCacheReads ?? incCacheReads;
+  if (cacheCreation > 0 || cacheRead > 0) {
+    notes.cacheTokens = { creation: cacheCreation, read: cacheRead };
+  }
+
+  return notes;
+}
+
 function extractUsageFromTaskHistory(item?: ClineTaskHistoryItem): SessionNotes {
   const notes: SessionNotes = {};
   if (!item) return notes;
@@ -1573,14 +1823,14 @@ function extractUsageFromApiHistory(messages: ClineApiMessage[]): SessionNotes {
  * single source is chosen, the totals are never double-counted across
  * UI/API/history.
  */
-function chooseUsageNotes(data: LoadedTaskData): SessionNotes {
+function chooseUsageNotes(data: LoadedTaskData, source: ClineSource): SessionNotes {
   const fromHistory = extractUsageFromTaskHistory(data.taskHistoryItem);
   if (fromHistory.tokenUsage || fromHistory.cacheTokens) return fromHistory;
 
   const fromApiHistory = extractUsageFromApiHistory(data.apiMessages);
   if (fromApiHistory.tokenUsage || fromApiHistory.cacheTokens) return fromApiHistory;
 
-  return extractTokenUsage(data.uiMessages);
+  return source === 'roo-code' ? extractRooTokenUsage(data.uiMessages) : extractTokenUsage(data.uiMessages);
 }
 
 /**
@@ -1736,6 +1986,31 @@ function resolveModel(data: LoadedTaskData): string | undefined {
   );
 }
 
+function buildSourceMetadata(data: LoadedTaskData): Record<string, unknown> | undefined {
+  const metadata: Record<string, unknown> = {};
+
+  if (data.apiMessages.length > 0) metadata.apiConversationMessages = data.apiMessages.length;
+  if (data.taskMetadata) {
+    metadata.taskMetadata = {
+      ...(data.taskMetadata.files_in_context ? { filesInContext: data.taskMetadata.files_in_context.length } : {}),
+      ...(data.taskMetadata.model_usage ? { modelUsage: data.taskMetadata.model_usage.length } : {}),
+    };
+  }
+  if (data.taskHistoryItem) {
+    metadata.historyItem = {
+      ...(data.taskHistoryItem.status ? { status: data.taskHistoryItem.status } : {}),
+      ...(data.taskHistoryItem.mode ? { mode: data.taskHistoryItem.mode } : {}),
+      ...(data.taskHistoryItem.apiConfigName ? { apiConfigName: data.taskHistoryItem.apiConfigName } : {}),
+    };
+  }
+
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
 function looksLikePath(value: string): boolean {
   return value.startsWith('/') || value.startsWith('~/') || /^[A-Za-z]:[\\/]/u.test(value);
 }
@@ -1875,6 +2150,18 @@ function getToolFilePath(input: Record<string, unknown>): string {
   return getInputString(input, 'path') || getInputString(input, 'file_path') || getInputString(input, 'filePath');
 }
 
+function isWriteToolName(toolName: string): boolean {
+  const normalized = toolName.toLowerCase();
+  return (
+    normalized.includes('write') ||
+    normalized.includes('edit') ||
+    normalized.includes('replace') ||
+    normalized.includes('apply') ||
+    normalized.includes('diff') ||
+    normalized.includes('patch')
+  );
+}
+
 function addClineToolSummary(
   collector: SummaryCollector,
   name: string,
@@ -1966,11 +2253,80 @@ function addClineToolSummary(
   }
 }
 
-function extractApiToolData(messages: ClineApiMessage[], config: VerbosityConfig): ToolData {
-  const collector = new SummaryCollector(config);
-  const resultMap = getToolResultMap(messages);
+function firstXmlTag(text: string, tag: string): string | undefined {
+  const match = text.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'iu'));
+  return match?.[1]?.trim();
+}
 
-  for (const message of messages) {
+function parseJsonUiToolRecord(text: string): { toolName?: string; filePath?: string } | undefined {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{')) return undefined;
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!isRecord(parsed)) return undefined;
+
+    const toolName =
+      readString(parsed, 'tool') ??
+      readString(parsed, 'toolName') ??
+      readString(parsed, 'tool_name') ??
+      readString(parsed, 'name');
+    const filePath = getToolFilePath(parsed);
+    if (!toolName && !filePath) return undefined;
+    return { toolName, filePath };
+  } catch (err) {
+    logger.debug('cline: skipping malformed UI tool JSON record', err);
+    return undefined;
+  }
+}
+
+function addUiToolSummaries(messages: ClineRawMessage[], collector: SummaryCollector): boolean {
+  let addedUiOnlyTool = false;
+
+  for (const msg of messages) {
+    if (!msg.text) continue;
+    const isToolRequest = (msg.type === 'ask' && msg.ask === 'tool') || (msg.type === 'say' && msg.say === 'tool');
+    if (!isToolRequest) continue;
+
+    const jsonRecord = parseJsonUiToolRecord(msg.text);
+    const toolName =
+      jsonRecord?.toolName ?? firstXmlTag(msg.text, 'tool_name') ?? msg.text.match(/<([a-z][\w-]*)>/iu)?.[1];
+    const filePath = jsonRecord?.filePath ?? firstXmlTag(msg.text, 'path') ?? firstXmlTag(msg.text, 'file_path');
+    if (!toolName && !filePath) continue;
+
+    const summary = `requested ${toolName ?? 'tool'}${filePath ? ` ${filePath}` : ''}`;
+    collector.add(toolName ? `ui:${toolName}` : 'ui:tool', summary, {
+      filePath,
+      isWrite: filePath ? isWriteToolName(toolName ?? msg.text) : false,
+    });
+    addedUiOnlyTool = true;
+  }
+
+  return addedUiOnlyTool;
+}
+
+function addMetadataFiles(taskMetadata: ClineTaskMetadata | undefined, collector: SummaryCollector): void {
+  const files = taskMetadata?.files_in_context;
+  if (!files) return;
+
+  for (const item of files) {
+    const filePath = readString(item, 'path');
+    if (!filePath) continue;
+    const source = readString(item, 'record_source');
+    const edited =
+      source === 'cline_edited' ||
+      source === 'user_edited' ||
+      readNumber(item, 'cline_edit_date') !== undefined ||
+      readNumber(item, 'user_edit_date') !== undefined;
+    if (edited) collector.trackFile(filePath);
+  }
+}
+
+function extractToolData(data: LoadedTaskData, config: VerbosityConfig): ToolData {
+  const collector = new SummaryCollector(config);
+  const resultMap = getToolResultMap(data.apiMessages);
+
+  for (const message of data.apiMessages) {
     for (const block of apiContentBlocks(message.content)) {
       if (block.type !== 'tool_use' || !block.name) continue;
       const result = block.id ? resultMap.get(block.id) : undefined;
@@ -1978,9 +2334,16 @@ function extractApiToolData(messages: ClineApiMessage[], config: VerbosityConfig
     }
   }
 
+  const hasUiOnlyToolSummaries = addUiToolSummaries(data.uiMessages, collector);
+  addMetadataFiles(data.taskMetadata, collector);
+
   return {
     summaries: collector.getSummaries(),
     filesModified: collector.getFilesModified(),
+    fidelityWarnings:
+      hasUiOnlyToolSummaries && data.apiMessages.length === 0
+        ? ['UI-only tool records are approval/status records; tool results may be incomplete.']
+        : [],
   };
 }
 
@@ -1988,7 +2351,7 @@ async function existingCompanionStats(
   files: TaskFiles,
 ): Promise<Array<{ filePath: string; size: number; birthtime: Date; mtime: Date }>> {
   const stats: Array<{ filePath: string; size: number; birthtime: Date; mtime: Date }> = [];
-  for (const filePath of [files.uiMessages, files.apiConversationHistory, files.taskMetadata]) {
+  for (const filePath of [files.uiMessages, files.apiConversationHistory, files.taskMetadata, files.historyItem]) {
     if (!(await pathExists(filePath))) continue;
     try {
       const fileStats = await fs.stat(filePath);
@@ -2194,13 +2557,9 @@ async function extractContextShared(session: UnifiedSession, config?: VerbosityC
   const recentMessages = allConversation.slice(-cfg.recentMessages);
 
   // Extract token usage and session notes
-  const sessionNotes: SessionNotes = chooseUsageNotes(data);
+  const sessionNotes: SessionNotes = chooseUsageNotes(data, session.source as ClineSource);
   const model = resolveModel(data);
   if (model) sessionNotes.model = model;
-
-  if (data.fidelityWarnings.length > 0) {
-    sessionNotes.fidelityWarnings = [...data.fidelityWarnings];
-  }
 
   // Extract reasoning highlights
   const uiReasoning = extractReasoning(data.uiMessages, cfg.thinking?.maxHighlights ?? 5);
@@ -2227,8 +2586,13 @@ async function extractContextShared(session: UnifiedSession, config?: VerbosityC
       ? pendingTasksFromAllConversation
       : extractPendingTasksFromConversation(apiConversation, maxPendingTasks);
 
-  const toolData =
-    data.apiMessages.length > 0 ? extractApiToolData(data.apiMessages, cfg) : { summaries: [], filesModified: [] };
+  const toolData = extractToolData(data, cfg);
+  const sourceMetadata = buildSourceMetadata(data);
+  if (sourceMetadata) sessionNotes.sourceMetadata = sourceMetadata;
+  const fidelityWarnings = uniqueStrings([...data.fidelityWarnings, ...toolData.fidelityWarnings]);
+  if (fidelityWarnings.length > 0) {
+    sessionNotes.fidelityWarnings = fidelityWarnings;
+  }
   const cwd = resolveCwd(data) || session.cwd;
   const sessionWithMetadata: UnifiedSession = {
     ...session,
