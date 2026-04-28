@@ -615,4 +615,106 @@ describe('crush parser', () => {
 
     fixture.cleanup();
   });
+
+  // Locks in the parser's read-only safety contract: the DatabaseSync handle
+  // the parser opens against any discovered Crush DB MUST reject writes.
+  // If a future edit drops `{ readOnly: true }` from openReadOnlyDatabase
+  // (src/parsers/crush.ts), this test fails. Crush is the user's primary
+  // data store for sessions, migrations, and read-files history — silent
+  // writes from a read-only tool would be a data-integrity regression.
+  it('rejects writes against a read-only Crush handle (parser open contract)', async () => {
+    const fixture = createCrushFixture();
+    useFixtureDb(fixture);
+    insertSession(fixture, { id: 'safety-session', title: 'Safety session' });
+    insertMessage(fixture, {
+      id: 'safety-msg',
+      sessionId: 'safety-session',
+      role: 'user',
+      parts: textPart('Verify the parser keeps the database read-only.'),
+      createdAt: 1_734_000_010,
+    });
+
+    // Round-trip through the parser to confirm read works against a real DB.
+    const sessions = await parseCrushSessions();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.id).toBe('safety-session');
+
+    // Open the same DB with the same options the parser uses
+    // (see openReadOnlyDatabase in src/parsers/crush.ts:159-160) and confirm
+    // node:sqlite v22.5+ enforces SQLITE_OPEN_READONLY when readOnly:true.
+    const handle = new DatabaseSync(fixture.dbPath, { readOnly: true });
+    try {
+      // INSERT must throw.
+      expect(() =>
+        handle
+          .prepare(
+            `INSERT INTO sessions (id, parent_session_id, title, message_count, prompt_tokens, completion_tokens, cost, updated_at, created_at, summary_message_id, todos)
+             VALUES ('writer', NULL, 'should not persist', 0, 0, 0, 0.0, ?, ?, NULL, NULL)`,
+          )
+          .run(1_734_000_999, 1_734_000_999),
+      ).toThrow();
+
+      // UPDATE must throw.
+      expect(() =>
+        handle.prepare("UPDATE sessions SET title = 'altered' WHERE id = ?").run('safety-session'),
+      ).toThrow();
+
+      // DDL must throw — catches the case where readOnly only blocks DML.
+      expect(() => handle.exec('CREATE TABLE writer_should_fail (x INTEGER)')).toThrow();
+    } finally {
+      handle.close();
+    }
+
+    // After the read-only handle closes, the original session must remain
+    // untouched — neither row counts nor titles changed.
+    const verify = new DatabaseSync(fixture.dbPath);
+    try {
+      const row = verify.prepare('SELECT title FROM sessions WHERE id = ?').get('safety-session') as
+        | { title: string }
+        | undefined;
+      expect(row?.title).toBe('Safety session');
+      const writerRow = verify.prepare('SELECT id FROM sessions WHERE id = ?').get('writer');
+      expect(writerRow).toBeUndefined();
+    } finally {
+      verify.close();
+    }
+
+    fixture.cleanup();
+  });
+
+  // Reasoning is one of seven Crush part types
+  // (charmbracelet/crush:internal/message/content.go — partType "reasoning"
+  // backed by ReasoningContent.Thinking). The parser surfaces these into
+  // sessionNotes.reasoning so the receiving tool can carry forward the
+  // assistant's thinking thread.
+  it('extracts reasoning parts into sessionNotes.reasoning', async () => {
+    const fixture = createCrushFixture();
+    useFixtureDb(fixture);
+    insertSession(fixture, { id: 'reasoning-session' });
+    insertMessage(fixture, {
+      id: 'reasoning-user',
+      sessionId: 'reasoning-session',
+      role: 'user',
+      parts: textPart('Walk me through the failure.'),
+      createdAt: 1_734_000_010,
+    });
+    insertMessage(fixture, {
+      id: 'reasoning-assistant',
+      sessionId: 'reasoning-session',
+      role: 'assistant',
+      model: 'claude-sonnet-4.5',
+      parts: [
+        { type: 'reasoning', data: { thinking: 'The path resolution dropped the trailing slash.' } },
+        { type: 'text', data: { text: 'Here is the fix.' } },
+      ],
+      createdAt: 1_734_000_020,
+    });
+
+    const sessions = await parseCrushSessions();
+    expect(sessions).toHaveLength(1);
+    const context = await extractCrushContext(sessions[0]);
+    expect(context.sessionNotes?.reasoning).toEqual(['The path resolution dropped the trailing slash.']);
+
+    fixture.cleanup();
+  });
 });
