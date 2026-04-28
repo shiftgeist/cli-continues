@@ -22,6 +22,15 @@ const CURSOR_FIDELITY_WARNING =
   'Cursor transcript completeness warning: local agent-transcripts are partial exports and may omit tool outputs, images, reasoning, compaction markers, or other hidden SQLite/session state.';
 const CURSOR_TIMESTAMP_TAG_RE = /<timestamp>([\s\S]*?)<\/timestamp>/i;
 const CURSOR_TIMESTAMP_TAG_GLOBAL_RE = /<timestamp>[\s\S]*?<\/timestamp>/gi;
+// Supported `<timestamp>` body shapes (English locale only, per Cursor's
+// hard-coded format observed in the wild and corroborated by VibeLens'
+// `_TIMESTAMP_BODY_RE`):
+//   `Sunday, Apr 26, 2026, 9:53 PM`
+//   `Sunday, Apr 26, 2026, 9:53 PM (UTC-4)`
+//   `Apr 26, 2026, 9:53 PM (UTC+05:30)`
+// The optional weekday prefix and (UTC±H[:MM]) suffix are both tolerated.
+// Locale-specific or named-tz timestamps fall back to file mtime via
+// `fs.statSync(filePath)` in `parseCursorSessions`.
 const CURSOR_TIMESTAMP_BODY_RE =
   /(?:[A-Za-z]+,\s*)?([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4}),\s+(\d{1,2}):(\d{2})\s+([AP]M)\s*(?:\(UTC([+-])(\d{1,2})(?::?(\d{2}))?\))?/i;
 
@@ -269,11 +278,21 @@ function getSessionId(filePath: string): string {
   return stem;
 }
 
-async function resolveProjectCwd(
-  projectDir: string,
-  slug: string,
-  cache: Map<string, string>,
-): Promise<string> {
+/**
+ * Resolve the project working directory from `repo.json`, with cached results.
+ *
+ * Cursor does not officially document the `repo.json` schema (see
+ * docs/parser-documentation/access-recipes/07-cursor.md), so the key
+ * precedence below is observed/inferred:
+ *
+ *   workspace > rootPath > path
+ *
+ * Independently corroborated by VibeLens (CHATS-lab/VibeLens
+ * `src/vibelens/ingest/parsers/cursor.py`), which uses the same order.
+ *
+ * Falls back to slug-derived cwd when `repo.json` is absent or unreadable.
+ */
+async function resolveProjectCwd(projectDir: string, slug: string, cache: Map<string, string>): Promise<string> {
   const fallback = cwdFromSlug(slug);
   if (!projectDir) return fallback;
 
@@ -327,7 +346,15 @@ async function parseSessionInfo(filePath: string): Promise<{
   // Stream-count lines without full JSON parse (fast)
   const stats = await getFileStats(filePath);
 
-  // Scan head for first user message
+  // Scan head for first user message. The 100-record cap is a discovery
+  // optimization (avoids streaming megabyte transcripts twice — once here,
+  // once in `extractCursorContext`). The discovery path treats a missing
+  // first-user-message as cosmetic-only: `parseCursorSessions` no longer
+  // gates on `messageCount`, so a session whose first user record lives
+  // past the head window still surfaces — it just lists without a summary
+  // until the user opens it (covered by the
+  // 'keeps long transcripts whose first parseable record sits past the head
+  //  scan window' regression test).
   await scanJsonlHead(filePath, 100, (parsed) => {
     const line = normalizeCursorLine(parsed);
     if (!line) return 'continue';

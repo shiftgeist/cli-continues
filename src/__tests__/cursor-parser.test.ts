@@ -410,4 +410,104 @@ describe('cursor parser hardening', () => {
     expect(matching).toHaveLength(1);
     expect(matching[0].updatedAt.toISOString()).toBe('2026-04-15T11:00:00.000Z');
   });
+
+  it('honors repo.json key precedence: workspace > rootPath > path', async () => {
+    const home = makeCursorHome();
+
+    // Slug A: workspace wins over rootPath and path
+    writeCursorRepoJson(home, 'Users-test-projectA', {
+      workspace: '/tmp/cursor-projectA-workspace',
+      rootPath: '/tmp/cursor-projectA-rootpath',
+      path: '/tmp/cursor-projectA-path',
+    });
+    writeCursorTranscript(home, 'Users-test-projectA', 'aaaaaaaa-1111-2222-3333-444444444444', [
+      { role: 'user', message: { content: [{ type: 'text', text: 'project A' }] } },
+    ]);
+
+    // Slug B: rootPath wins over path when workspace is absent
+    writeCursorRepoJson(home, 'Users-test-projectB', {
+      rootPath: '/tmp/cursor-projectB-rootpath',
+      path: '/tmp/cursor-projectB-path',
+    });
+    writeCursorTranscript(home, 'Users-test-projectB', 'bbbbbbbb-1111-2222-3333-444444444444', [
+      { role: 'user', message: { content: [{ type: 'text', text: 'project B' }] } },
+    ]);
+
+    // Slug C: path is the last resort
+    writeCursorRepoJson(home, 'Users-test-projectC', {
+      path: '/tmp/cursor-projectC-path',
+    });
+    writeCursorTranscript(home, 'Users-test-projectC', 'cccccccc-1111-2222-3333-444444444444', [
+      { role: 'user', message: { content: [{ type: 'text', text: 'project C' }] } },
+    ]);
+
+    // Slug D: empty values fall through to next key
+    writeCursorRepoJson(home, 'Users-test-projectD', {
+      workspace: '',
+      rootPath: '/tmp/cursor-projectD-rootpath',
+      path: '/tmp/cursor-projectD-path',
+    });
+    writeCursorTranscript(home, 'Users-test-projectD', 'dddddddd-1111-2222-3333-444444444444', [
+      { role: 'user', message: { content: [{ type: 'text', text: 'project D' }] } },
+    ]);
+
+    const { parseCursorSessions } = await loadCursorParser(home);
+    const sessions = await parseCursorSessions();
+    const byId = new Map(sessions.map((s) => [s.id, s.cwd]));
+
+    expect(byId.get('aaaaaaaa-1111-2222-3333-444444444444')).toBe('/tmp/cursor-projectA-workspace');
+    expect(byId.get('bbbbbbbb-1111-2222-3333-444444444444')).toBe('/tmp/cursor-projectB-rootpath');
+    expect(byId.get('cccccccc-1111-2222-3333-444444444444')).toBe('/tmp/cursor-projectC-path');
+    expect(byId.get('dddddddd-1111-2222-3333-444444444444')).toBe('/tmp/cursor-projectD-rootpath');
+  });
+
+  it('discovers Cursor sub-agent transcripts under <sid>/subagents/', async () => {
+    // Per Cursor's documented agent-transcripts layout (observed in
+    // dev.to reverse-engineering article + VibeLens parser), sub-agent
+    // sessions live at:
+    //   ~/.cursor/projects/<slug>/agent-transcripts/<parent-sid>/subagents/<child-sid>.jsonl
+    // findFiles' maxDepth=2 lets us reach them; getSessionId returns the
+    // child uuid (parent dir is `subagents`, which is excluded only when the
+    // stem is the literal `transcript` — child stems are uuids, so they pass).
+    const home = makeCursorHome();
+    const parentSid = 'aaaaaaaa-1111-2222-3333-444444444444';
+    const childSid = 'bbbbbbbb-1111-2222-3333-444444444444';
+
+    writeCursorRepoJson(home, 'Users-test-project', { workspace: '/tmp/cursor-project' });
+    writeCursorTranscript(
+      home,
+      'Users-test-project',
+      parentSid,
+      [{ role: 'user', message: { content: [{ type: 'text', text: 'parent transcript' }] } }],
+      'transcript.jsonl',
+    );
+
+    const subDir = path.join(
+      home,
+      '.cursor',
+      'projects',
+      'Users-test-project',
+      'agent-transcripts',
+      parentSid,
+      'subagents',
+    );
+    fs.mkdirSync(subDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(subDir, `${childSid}.jsonl`),
+      `${JSON.stringify({
+        role: 'user',
+        message: { content: [{ type: 'text', text: 'sub-agent prompt' }] },
+      })}\n`,
+      'utf8',
+    );
+
+    const { parseCursorSessions } = await loadCursorParser(home);
+    const sessions = await parseCursorSessions();
+    const ids = sessions.map((s) => s.id);
+
+    expect(ids).toEqual(expect.arrayContaining([parentSid, childSid]));
+    const subagent = sessions.find((s) => s.id === childSid);
+    expect(subagent?.cwd).toBe('/tmp/cursor-project');
+    expect(subagent?.summary).toBe('sub-agent prompt');
+  });
 });
