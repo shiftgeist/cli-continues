@@ -171,6 +171,17 @@ function cleanEnvPath(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+/**
+ * Build the ordered list of candidate Kilo data roots. The default app
+ * directory upstream is the literal "kilo" name appended to xdg-basedir's
+ * data root (packages/opencode/src/global/index.ts: `const app = "kilo"`),
+ * so on every platform Kilo first writes under `$XDG_DATA_HOME/kilo` or
+ * `~/.local/share/kilo`. The macOS / Windows fallbacks below are defensive
+ * paths for non-default installs (sandboxed environments, custom XDG layouts
+ * that mirror native OS conventions). Upstream Kilo does NOT itself write to
+ * `~/Library/Application Support/kilo` or `%APPDATA%\kilo`; we probe them
+ * only so a non-canonical install does not silently disappear from discovery.
+ */
 function getKiloDataRoots(): string[] {
   const home = homeDir();
   const roots: string[] = [];
@@ -178,6 +189,7 @@ function getKiloDataRoots(): string[] {
 
   if (xdgDataHome) roots.push(path.join(xdgDataHome, 'kilo'));
 
+  // Kilo's canonical default on every platform via xdg-basedir fallback.
   roots.push(path.join(home, '.local', 'share', 'kilo'));
 
   if (process.platform === 'darwin') {
@@ -211,6 +223,13 @@ async function discoverKiloDbPaths(): Promise<string[]> {
   return dbPaths;
 }
 
+/**
+ * Open Kilo's SQLite session store strictly read-only. Read-only is enforced
+ * via `node:sqlite`'s `readOnly: true` flag (Node.js v22+; verified at
+ * runtime by our integration test, which asserts that any write through this
+ * handle throws). Read-only is non-negotiable: this parser must never mutate
+ * a user's `kilo.db`.
+ */
 function openKiloDb(dbPath: string): { db: SqliteDatabase; close: () => void } | null {
   try {
     const sqliteModule = require('node:sqlite') as {
@@ -399,6 +418,28 @@ function roleFromMessageData(data: Record<string, unknown>): ConversationMessage
   return null;
 }
 
+/**
+ * Convert a Kilo part record into a single-line preview string for the
+ * cross-tool handoff conversation.
+ *
+ * Design decision (per PR open question on tool-part fidelity):
+ *   We summarize tool / patch / snapshot / agent / compaction / file / subtask
+ *   parts as `[type] preview` text rather than projecting them as structured
+ *   ConversationMessage.toolCall records. The rest of the Cline-family pipeline
+ *   feeds a markdown handoff (see `generateHandoffMarkdown`) — preview text
+ *   keeps the next-tool prompt compact, faithful to source ordering, and
+ *   consistent with how the legacy `ui_messages.json` path already flattens
+ *   tool activity into prose. Promoting these to structured tool calls would
+ *   require a parallel toolSummaries pipeline that the handoff renderer does
+ *   not currently consume.
+ *
+ * Part types covered (Kilo MessageV2 schema, packages/opencode/src/session/message-v2.ts):
+ *   text, reasoning, tool, file, snapshot, patch, agent, compaction, subtask, retry
+ *
+ * Part types intentionally elided (internal markers without user-meaningful prose):
+ *   step-start, step-finish — token totals are read at the message level via
+ *   `addKiloTokenUsage`; carrying them in conversation would dilute signal.
+ */
 function extractKiloPartContent(partData: Record<string, unknown>): string {
   const type = readString(partData, 'type');
 
@@ -414,9 +455,36 @@ function extractKiloPartContent(partData: Record<string, unknown>): string {
   if (type === 'tool') {
     const toolName = readString(partData, 'tool') ?? readString(partData, 'name') ?? 'tool';
     const state = readRecord(partData, 'state');
+    const status = state ? readString(state, 'status') : undefined;
     const input = state ? previewValue(state.input, 90) : previewValue(partData.input, 90);
-    const output = state ? previewValue(state.output ?? state.error, 120) : previewValue(partData.output, 120);
-    return [`[tool:${toolName}]`, input, output].filter(Boolean).join(' ');
+    const output = state
+      ? previewValue(state.output ?? state.error, 120)
+      : previewValue(partData.output ?? partData.error, 120);
+    const label = status && status !== 'completed' ? `[tool:${toolName}:${status}]` : `[tool:${toolName}]`;
+    return [label, input, output].filter(Boolean).join(' ');
+  }
+
+  if (type === 'file') {
+    const filename = readString(partData, 'filename') ?? readString(partData, 'name') ?? '';
+    const mime = readString(partData, 'mime') ?? readString(partData, 'mediaType');
+    const url = readString(partData, 'url');
+    const descriptor = filename || url || mime || 'attachment';
+    return mime && filename ? `[file] ${descriptor} (${mime})` : `[file] ${descriptor}`;
+  }
+
+  if (type === 'subtask') {
+    const agent = readString(partData, 'agent') ?? 'subtask';
+    const description = firstString(partData, ['description', 'prompt', 'command']) ?? '';
+    return description ? `[subtask:${agent}] ${description}` : `[subtask:${agent}]`;
+  }
+
+  if (type === 'retry') {
+    const attempt = readNumber(partData, 'attempt');
+    const error = readRecord(partData, 'error');
+    const errorMessage =
+      (error && firstString(error, ['message', 'name', 'code'])) ?? readString(partData, 'error') ?? '';
+    const prefix = attempt !== undefined ? `[retry:${attempt}]` : '[retry]';
+    return errorMessage ? `${prefix} ${errorMessage}` : prefix;
   }
 
   if (type === 'patch' || type === 'snapshot' || type === 'agent' || type === 'compaction') {
@@ -424,6 +492,7 @@ function extractKiloPartContent(partData: Record<string, unknown>): string {
     return preview ? `[${type}] ${preview}` : '';
   }
 
+  // step-start, step-finish: deliberately empty — tracked at message level only.
   return '';
 }
 
