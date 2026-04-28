@@ -524,4 +524,47 @@ describe('kiro parser hardening', () => {
     expect(context.sessionNotes?.fidelityWarnings?.[0]).toContain('SQLite stores under ~/.kiro/ are skipped');
     expect(context.markdown).toContain('SQLite stores under ~/.kiro/ are skipped');
   });
+
+  it('does not double-count bytes for lone ACP jsonl sessions without sibling metadata', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-parser-'));
+    tmpHomes.push(home);
+    const sessionDir = createKiroAcpSessionDir(home);
+    const eventPath = path.join(sessionDir, 'sess_acp_lone.jsonl');
+
+    writeJsonl(eventPath, [
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'session/new',
+        params: { sessionId: 'sess_acp_lone', cwd: '/tmp/lone-acp' },
+      },
+      {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'session/prompt',
+        params: { sessionId: 'sess_acp_lone', content: 'Lone jsonl prompt' },
+      },
+      {
+        jsonrpc: '2.0',
+        method: 'session/notification',
+        params: {
+          sessionId: 'sess_acp_lone',
+          update: { type: 'AgentMessageChunk', content: 'lone reply' },
+        },
+      },
+      {
+        jsonrpc: '2.0',
+        method: 'session/notification',
+        params: { sessionId: 'sess_acp_lone', update: { type: 'TurnEnd' } },
+      },
+    ]);
+
+    const { parseKiroSessions } = await loadKiroParserWithHome(home);
+    const sessions = await parseKiroSessions();
+
+    expect(sessions).toHaveLength(1);
+    // Without de-dupe, bytes would be reported as 2x the file size.
+    expect(sessions[0].bytes).toBe(fs.statSync(eventPath).size);
+    expect(sessions[0].originalPath).toBe(eventPath);
+  });
 });

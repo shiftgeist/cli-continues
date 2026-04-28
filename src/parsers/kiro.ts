@@ -665,10 +665,12 @@ function buildSummary(
 async function statSessionRef(ref: KiroSessionRef): Promise<KiroStatInfo | undefined> {
   try {
     if (ref.surface === 'acp-jsonl') {
-      const paths = [ref.sessionPath, ref.eventPath].filter((filePath): filePath is string => {
+      const candidatePaths = [ref.sessionPath, ref.eventPath].filter((filePath): filePath is string => {
         if (!filePath) return false;
         return fs.existsSync(filePath);
       });
+      // De-dupe so lone-jsonl refs (where sessionPath === eventPath) do not double-count bytes.
+      const paths = Array.from(new Set(candidatePaths.map((filePath) => path.resolve(filePath))));
       if (paths.length === 0) return undefined;
 
       const stats = await Promise.all(paths.map((filePath) => fsp.stat(filePath)));
