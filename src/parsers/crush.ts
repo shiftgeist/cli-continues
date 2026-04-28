@@ -71,6 +71,8 @@ interface CrushSessionRow {
   firstMessageAt: number | undefined;
   lastMessageAt: number | undefined;
   messageCount: number;
+  latestModel: string | undefined;
+  latestProvider: string | undefined;
 }
 
 interface CrushMessageRow {
@@ -429,6 +431,8 @@ function parseSessionRow(row: unknown): CrushSessionRow | undefined {
     firstMessageAt: numberValue(row, 'firstMessageAt'),
     lastMessageAt: numberValue(row, 'lastMessageAt'),
     messageCount: numberValue(row, 'messageCount') ?? 0,
+    latestModel: stringValue(row, 'latestModel'),
+    latestProvider: stringValue(row, 'latestProvider'),
   };
 }
 
@@ -568,35 +572,38 @@ function getFirstUserMessage(db: SqliteDatabase, schema: CrushSchema, sessionId:
   return parts.malformed ? '' : parts.text;
 }
 
-function getLatestAssistantMetadata(
-  db: SqliteDatabase,
-  schema: CrushSchema,
-  sessionId: string,
-): { model: string | undefined; provider: string | undefined } {
+/**
+ * Build a correlated subquery expression that returns the requested column
+ * (e.g. `model` or `provider`) from the latest non-summary assistant message
+ * for the outer `s.id` session. Folding this into the main listing query
+ * avoids per-session N+1 queries during `parseCrushSessions`.
+ */
+function buildLatestAssistantSubquery(schema: CrushSchema, column: 'model' | 'provider'): string {
   if (!schema.messageColumns.has('role') || !schema.messageColumns.has('model')) {
-    return { model: undefined, provider: undefined };
+    return 'NULL';
+  }
+  if (column === 'provider' && !schema.messageColumns.has('provider')) {
+    return 'NULL';
   }
 
-  const providerSelect = selectColumn(schema.messageColumns, 'provider', 'NULL', 'provider');
   const summaryFilter = schema.messageColumns.has('is_summary_message')
-    ? 'AND COALESCE(is_summary_message, 0) = 0'
+    ? 'AND COALESCE(lm.is_summary_message, 0) = 0'
     : '';
-  const row = safeGet(
-    db,
-    `SELECT model AS model, ${providerSelect}
-     FROM messages
-     WHERE session_id = ? AND role = 'assistant' AND model IS NOT NULL AND model != '' ${summaryFilter}
-     ORDER BY ${messageOrderBy(schema, 'DESC')}
-     LIMIT 1`,
-    [sessionId],
-    'latest Crush assistant metadata',
-  );
+  const orderParts: string[] = [];
+  if (schema.messageColumns.has('created_at')) orderParts.push('lm.created_at DESC');
+  orderParts.push(schema.messageColumns.has('id') ? 'lm.id DESC' : 'lm.rowid DESC');
 
-  if (!isRecord(row)) return { model: undefined, provider: undefined };
-  return {
-    model: stringValue(row, 'model'),
-    provider: stringValue(row, 'provider'),
-  };
+  return `(
+    SELECT lm.${column}
+    FROM messages lm
+    WHERE lm.session_id = s.id
+      AND lm.role = 'assistant'
+      AND lm.model IS NOT NULL
+      AND lm.model != ''
+      ${summaryFilter}
+    ORDER BY ${orderParts.join(', ')}
+    LIMIT 1
+  )`;
 }
 
 function listSessionsFromDb(
@@ -618,6 +625,8 @@ function listSessionsFromDb(
   const sessionCreatedAt = sessionTimestampExpression(schema, 'created_at');
   const orderMessageAt = schema.messageColumns.has('created_at') ? 'MAX(m.created_at)' : 'NULL';
   const orderBy = `COALESCE(${orderMessageAt}, ${sessionUpdatedAt}, ${sessionCreatedAt}, 0)`;
+  const latestModelExpression = buildLatestAssistantSubquery(schema, 'model');
+  const latestProviderExpression = buildLatestAssistantSubquery(schema, 'provider');
   const rows = safeAll(
     db,
     `SELECT
@@ -630,7 +639,9 @@ function listSessionsFromDb(
        ${selectQualifiedColumn(schema.sessionColumns, 's', 'updated_at', 'NULL', 'sessionUpdatedAt')},
        ${firstMessageAt} AS firstMessageAt,
        ${lastMessageAt} AS lastMessageAt,
-       ${messageCount} AS messageCount
+       ${messageCount} AS messageCount,
+       ${latestModelExpression} AS latestModel,
+       ${latestProviderExpression} AS latestProvider
      FROM sessions s
      LEFT JOIN messages m ON m.session_id = s.id ${messageSummaryJoin}
      ${parentFilter}
@@ -646,8 +657,13 @@ function listSessionsFromDb(
     const row = parseSessionRow(rawRow);
     if (!row || row.messageCount <= 0) continue;
 
-    const firstUserMessage = getFirstUserMessage(db, schema, row.id);
-    const summarySource = isGenericTitle(row.title) ? firstUserMessage || row.title : row.title || firstUserMessage;
+    // Avoid N+1 queries: only read the first user message when the title is
+    // empty or matches the generic-title set; otherwise the title alone is the
+    // summary source.
+    const hasTitle = row.title.trim().length > 0;
+    const genericTitle = isGenericTitle(row.title);
+    const firstUserMessage = !hasTitle || genericTitle ? getFirstUserMessage(db, schema, row.id) : '';
+    const summarySource = genericTitle ? firstUserMessage || row.title : row.title || firstUserMessage;
     const summary = cleanSummary(summarySource);
     if (!summary) continue;
 
@@ -661,7 +677,6 @@ function listSessionsFromDb(
       normalizeTimestamp(row.sessionUpdatedAt) ??
       normalizeTimestamp(row.sessionCreatedAt) ??
       createdAt;
-    const metadata = getLatestAssistantMetadata(db, schema, row.id);
     const cwd = candidate.cwd;
 
     if (options?.cwd && cwd && !matchesCrushCwd(cwd, options.cwd)) continue;
@@ -677,7 +692,7 @@ function listSessionsFromDb(
       updatedAt,
       originalPath: candidate.dbPath,
       summary,
-      ...(metadata.model ? { model: metadata.model } : {}),
+      ...(row.latestModel ? { model: row.latestModel } : {}),
     });
   }
 
@@ -815,8 +830,24 @@ function extractPendingTasksFromTodoText(raw: string, tasks: string[], seen: Set
   }
 }
 
-function extractPendingTasksFromTodoValue(value: unknown, tasks: string[], seen: Set<string>, limit: number): void {
+// Defensive guard for traversing todo payloads. Crush typically writes shallow
+// JSON arrays, but pathologically nested values (e.g. `{todos: {todos: ...}}`)
+// could otherwise blow the stack — we cap recursion well above any realistic
+// real-world depth.
+const MAX_TODO_RECURSION_DEPTH = 32;
+
+function extractPendingTasksFromTodoValue(
+  value: unknown,
+  tasks: string[],
+  seen: Set<string>,
+  limit: number,
+  depth: number,
+): void {
   if (tasks.length >= limit || value === undefined || value === null) return;
+  if (depth > MAX_TODO_RECURSION_DEPTH) {
+    logger.debug('crush: todos recursion depth exceeded; stopping traversal');
+    return;
+  }
 
   if (typeof value === 'string') {
     const trimmed = value.trim();
@@ -824,7 +855,7 @@ function extractPendingTasksFromTodoValue(value: unknown, tasks: string[], seen:
 
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
       try {
-        extractPendingTasksFromTodoValue(JSON.parse(trimmed) as unknown, tasks, seen, limit);
+        extractPendingTasksFromTodoValue(JSON.parse(trimmed) as unknown, tasks, seen, limit, depth + 1);
         return;
       } catch (err) {
         logger.debug('crush: failed to parse todos JSON', err);
@@ -837,7 +868,7 @@ function extractPendingTasksFromTodoValue(value: unknown, tasks: string[], seen:
 
   if (Array.isArray(value)) {
     for (const item of value) {
-      extractPendingTasksFromTodoValue(item, tasks, seen, limit);
+      extractPendingTasksFromTodoValue(item, tasks, seen, limit, depth + 1);
       if (tasks.length >= limit) return;
     }
     return;
@@ -846,7 +877,7 @@ function extractPendingTasksFromTodoValue(value: unknown, tasks: string[], seen:
   if (!isRecord(value)) return;
 
   if ('todos' in value) {
-    extractPendingTasksFromTodoValue(value.todos, tasks, seen, limit);
+    extractPendingTasksFromTodoValue(value.todos, tasks, seen, limit, depth + 1);
   }
 
   const content =
@@ -863,7 +894,7 @@ function extractPendingTasksFromTodos(todos: string | undefined, limit: number):
   if (!todos || limit <= 0) return [];
 
   const tasks: string[] = [];
-  extractPendingTasksFromTodoValue(todos, tasks, new Set<string>(), limit);
+  extractPendingTasksFromTodoValue(todos, tasks, new Set<string>(), limit, 0);
   return tasks;
 }
 
@@ -1251,7 +1282,7 @@ export async function extractCrushContext(session: UnifiedSession, config?: Verb
       return emptyContext(
         session,
         resolvedConfig,
-        'Crush SQLite schema did not contain sessions/messages tables.',
+        'Crush SQLite schema was missing required sessions/messages tables or columns.',
         candidate.dbPath,
       );
     }

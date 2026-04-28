@@ -816,6 +816,11 @@ register({
   color: chalk.hex('#E63946'),
   storagePath: '~/.crush/crush.db',
   binaryName: 'crush',
+  // The Crush parser resolves its database path from any of these env vars
+  // (see getCrushDbCandidates in src/parsers/crush.ts). Declaring them here
+  // ensures the unified session index cache fingerprint invalidates whenever
+  // any of them change.
+  extraEnvVars: ['CRUSH_DB', 'CRUSH_DB_PATH', 'CRUSH_DATA_DIR', 'CRUSH_GLOBAL_DATA', 'XDG_DATA_HOME'],
   parseSessions: parseCrushSessions,
   extractContext: extractCrushContext,
   nativeResumeArgs: (s) => ['--session', s.id],
