@@ -209,6 +209,114 @@ describe('qwen-code parser', () => {
     ]);
   });
 
+  it('recovers a valid JSON object that follows a malformed fragment on the same line', async () => {
+    const runtimeDir = makeTempDir();
+    process.env.QWEN_RUNTIME_DIR = runtimeDir;
+    delete process.env.QWEN_HOME;
+
+    const validRecord = qwenRecord({
+      uuid: 'u-recovered',
+      timestamp: '2026-01-15T10:05:00.000Z',
+      message: { role: 'user', parts: [{ text: 'Recover after a leading malformed fragment.' }] },
+    });
+
+    // The first object opens a string that never closes ("garbage), so depth
+    // never returns to zero. The recovery scan must skip past that opening
+    // brace and still find the trailing valid object on the same line.
+    writeRuntimeSession(runtimeDir, [`{"unterminated": "garbage${JSON.stringify(validRecord)}`]);
+
+    const sessions = await parseQwenCodeSessions();
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.summary).toBe('Recover after a leading malformed fragment.');
+  });
+
+  it('silently skips top-level arrays and scalars while keeping intervening objects', async () => {
+    const runtimeDir = makeTempDir();
+    process.env.QWEN_RUNTIME_DIR = runtimeDir;
+    delete process.env.QWEN_HOME;
+
+    const validRecord = qwenRecord({
+      uuid: 'u-around-garbage',
+      timestamp: '2026-01-15T10:06:00.000Z',
+      message: { role: 'user', parts: [{ text: 'Top-level garbage must not produce records.' }] },
+    });
+
+    writeRuntimeSession(runtimeDir, [`[1,2,3] "string" 42 ${JSON.stringify(validRecord)} null`]);
+
+    const sessions = await parseQwenCodeSessions();
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.summary).toBe('Top-level garbage must not produce records.');
+  });
+
+  it('preserves earlier function calls when an assistant uuid is appended in multiple fragments', async () => {
+    const dir = makeTempDir();
+    const sessionPath = path.join(dir, `${SESSION_ID}.jsonl`);
+    writeJsonl(sessionPath, [
+      qwenRecord({
+        uuid: 'u1',
+        message: { role: 'user', parts: [{ text: 'Run two distinct shell calls across fragments.' }] },
+      }),
+      qwenRecord({
+        uuid: 'a-frag',
+        parentUuid: 'u1',
+        timestamp: '2026-01-15T10:01:00.000Z',
+        type: 'assistant',
+        message: {
+          role: 'model',
+          parts: [{ functionCall: { id: 'call-first', name: 'Bash', args: { command: 'echo first' } } }],
+        },
+      }),
+      qwenRecord({
+        uuid: 'a-frag',
+        parentUuid: 'u1',
+        timestamp: '2026-01-15T10:02:00.000Z',
+        type: 'assistant',
+        message: {
+          role: 'model',
+          parts: [{ functionCall: { id: 'call-second', name: 'Bash', args: { command: 'echo second' } } }],
+        },
+      }),
+      qwenRecord({
+        uuid: 't1',
+        parentUuid: 'a-frag',
+        timestamp: '2026-01-15T10:03:00.000Z',
+        type: 'tool_result',
+        message: {
+          role: 'user',
+          parts: [
+            {
+              functionResponse: {
+                callId: 'call-first',
+                name: 'Bash',
+                response: { output: 'first output', status: 'ok' },
+              },
+            },
+            {
+              functionResponse: {
+                callId: 'call-second',
+                name: 'Bash',
+                response: { output: 'second output', status: 'ok' },
+              },
+            },
+          ],
+        },
+      }),
+    ]);
+
+    const context = await extractQwenCodeContext(sessionFor(sessionPath));
+    const bashSummary = context.toolSummaries.find((summary) => summary.name === 'Bash');
+
+    // Both function calls (one per fragment) must survive aggregation and
+    // reach `extractToolData`, so we expect two paired Bash summaries — not
+    // just the latest fragment's call.
+    expect(bashSummary?.count).toBe(2);
+    const summaries = (bashSummary?.samples ?? []).map((sample) => sample.summary);
+    expect(summaries.some((line) => line.includes('$ echo first') && line.includes('first output'))).toBe(true);
+    expect(summaries.some((line) => line.includes('$ echo second') && line.includes('second output'))).toBe(true);
+  });
+
   it('uses append-order main path instead of a newer abandoned branch', async () => {
     const dir = makeTempDir();
     const sessionPath = path.join(dir, `${SESSION_ID}.jsonl`);
@@ -640,5 +748,109 @@ describe('qwen-code parser', () => {
     expect(context.session.model).toBe('qwen3-coder-plus');
     expect(context.markdown).toContain('Qwen Code');
     expect(context.markdown).toContain('I have the parser changes ready.');
+  });
+
+  it('skips oversized JSONL records (16MB threshold) without dropping later valid records', async () => {
+    const runtimeDir = makeTempDir();
+    process.env.QWEN_RUNTIME_DIR = runtimeDir;
+    delete process.env.QWEN_HOME;
+
+    const goodRecord = qwenRecord({
+      uuid: 'u-good',
+      timestamp: '2026-01-15T10:00:00.000Z',
+      message: { role: 'user', parts: [{ text: 'Survive past the oversized line.' }] },
+    });
+    // Build a > 16 MiB single physical line. The shared scanner skips it via
+    // MAX_QWEN_JSONL_RECORD_CHARS (16 * 1024 * 1024) without buffering the
+    // full payload — protecting Node's readline buffer on tool-output-heavy
+    // sessions.
+    const oversizedPayload = 'x'.repeat(17 * 1024 * 1024);
+    const oversizedRecord = JSON.stringify(
+      qwenRecord({
+        uuid: 'u-oversized',
+        timestamp: '2026-01-15T10:01:00.000Z',
+        message: { role: 'user', parts: [{ text: oversizedPayload }] },
+      }),
+    );
+    const trailingRecord = qwenRecord({
+      uuid: 'a-trailing',
+      parentUuid: 'u-good',
+      timestamp: '2026-01-15T10:02:00.000Z',
+      type: 'assistant',
+      message: { role: 'model', parts: [{ text: 'Trailing assistant turn survives.' }] },
+    });
+
+    const sessionPath = writeRuntimeSession(runtimeDir, [goodRecord, oversizedRecord, trailingRecord]);
+    expect(fs.statSync(sessionPath).size).toBeGreaterThan(16 * 1024 * 1024);
+
+    const sessions = await parseQwenCodeSessions();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.summary).toBe('Survive past the oversized line.');
+
+    const context = await extractQwenCodeContext(sessionFor(sessionPath));
+
+    // Trailing record after the skipped oversized line must still appear.
+    expect(context.recentMessages.map((message) => message.content)).toEqual([
+      'Survive past the oversized line.',
+      'Trailing assistant turn survives.',
+    ]);
+    // The oversized payload must NOT have been buffered (otherwise the skip
+    // is just a fiction): the parsed messages stay short.
+    for (const message of context.recentMessages) {
+      expect(message.content.length).toBeLessThan(1024);
+    }
+  });
+
+  it('omits ambiguous same-tool calls when both lack a callId rather than mispairing outputs', async () => {
+    // Two `Bash` calls in one assistant turn, no callIds, two function
+    // responses without callIds — the parser cannot prove which response
+    // belongs to which call. It must record the two calls (so the count is
+    // accurate) but decline to attach either ambiguous output to a specific
+    // call. Anything else is silently confident in a guess.
+    const dir = makeTempDir();
+    const sessionPath = path.join(dir, `${SESSION_ID}.jsonl`);
+    writeJsonl(sessionPath, [
+      qwenRecord({
+        uuid: 'u1',
+        message: { role: 'user', parts: [{ text: 'Run two bash calls without ids.' }] },
+      }),
+      qwenRecord({
+        uuid: 'a1',
+        parentUuid: 'u1',
+        timestamp: '2026-01-15T10:01:00.000Z',
+        type: 'assistant',
+        message: {
+          role: 'model',
+          parts: [
+            { functionCall: { name: 'Bash', args: { command: 'echo first' } } },
+            { functionCall: { name: 'Bash', args: { command: 'echo second' } } },
+          ],
+        },
+      }),
+      qwenRecord({
+        uuid: 't1',
+        parentUuid: 'a1',
+        timestamp: '2026-01-15T10:02:00.000Z',
+        type: 'tool_result',
+        message: {
+          role: 'user',
+          parts: [
+            { functionResponse: { name: 'Bash', response: { output: 'ambiguous A', status: 'ok' } } },
+            { functionResponse: { name: 'Bash', response: { output: 'ambiguous B', status: 'ok' } } },
+          ],
+        },
+      }),
+    ]);
+
+    const context = await extractQwenCodeContext(sessionFor(sessionPath));
+    const bashSummary = context.toolSummaries.find((summary) => summary.name === 'Bash');
+
+    expect(bashSummary?.count).toBe(2);
+    // Neither sample may carry a specific output — that would imply a
+    // pairing the parser cannot defend.
+    for (const sample of bashSummary?.samples ?? []) {
+      expect(sample.summary).not.toContain('ambiguous A');
+      expect(sample.summary).not.toContain('ambiguous B');
+    }
   });
 });

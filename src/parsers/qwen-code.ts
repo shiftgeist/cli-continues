@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { StringDecoder } from 'node:string_decoder';
 import type { VerbosityConfig } from '../config/index.js';
 import { getPreset } from '../config/index.js';
 import { logger } from '../logger.js';
@@ -15,14 +14,26 @@ import type { QwenChatRecord, QwenContent, QwenFileDiff, QwenPart } from '../typ
 import { QwenChatRecordSchema } from '../types/schemas.js';
 import { classifyToolName } from '../types/tool-names.js';
 import { listSubdirectories } from '../utils/fs-helpers.js';
-import { getFileStats } from '../utils/jsonl.js';
+import { scanJsonlLines } from '../utils/jsonl.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { cleanSummary, extractRepoFromCwd, homeDir } from '../utils/parser-helpers.js';
 import { fileSummary, mcpSummary, SummaryCollector, shellSummary, truncate } from '../utils/tool-summarizer.js';
 
-// Qwen Code stores chats under <runtime-base>/projects/<sanitized-cwd>/chats/.
-// The official runtime base is QWEN_RUNTIME_DIR, falling back to ~/.qwen.
-// QWEN_HOME is kept as a legacy test/user override and points at a home dir.
+// Qwen Code stores chats under <runtime-base>/projects/<sanitized-cwd>/chats/<sessionId>.jsonl.
+//
+// Runtime base resolution mirrors upstream Qwen Code
+// (packages/core/src/config/storage.ts: Storage.getRuntimeBaseDir):
+//   1. QWEN_RUNTIME_DIR env var (canonical Qwen override)
+//   2. ~/.qwen (Storage.getGlobalQwenDir fallback)
+// QWEN_HOME is a continues-side override (no upstream equivalent) for
+// fixtures and sandboxed installs that want to redirect lookups at a custom
+// home dir without touching real user data. We treat its value as a home dir
+// (joining `.qwen` when not already terminated by it).
+//
+// cwd sanitization mirrors upstream sanitizeCwd
+// (packages/core/src/utils/paths.ts:243): replace /[^a-zA-Z0-9]/g with `-`,
+// lowercased on Windows. Tests rely on the same scheme so fixture writes and
+// parser reads stay in lockstep.
 
 const MAX_QWEN_JSONL_RECORD_CHARS = 16 * 1024 * 1024;
 
@@ -61,6 +72,7 @@ interface QwenSessionMeta {
   model?: string;
   lineCount: number;
   bytes: number;
+  mtime: Date;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -161,50 +173,90 @@ function isToolResultError(status: string | undefined): boolean {
 
 // ── JSONL reading ───────────────────────────────────────────────────────────
 
+/**
+ * Recover top-level JSON objects from a single physical JSONL line, even when
+ * Qwen Code has glued multiple records together (rare runtime races) or
+ * truncated one mid-write.
+ *
+ * **Scope: top-level objects only.** Upstream Qwen Code writes one
+ * `ChatRecord` object per line via `chatRecordingService.ts` (which calls
+ * `jsonl.writeLine`/`writeLineSync` with a single `ChatRecord`). It never
+ * writes top-level arrays, scalars, or non-object records. Anything that is
+ * not a `{ ... }` object — bare arrays, strings, numbers, garbage between
+ * records — is intentionally skipped by this splitter so a corrupt fragment
+ * cannot spoof a record. If upstream ever changes the on-disk shape, this
+ * function has to be updated explicitly; the existing test
+ * `'silently skips top-level arrays and scalars while keeping intervening objects'`
+ * pins the contract.
+ *
+ * Recovery semantics: scan forward looking for `{`, track string/escape
+ * state, balance `{`/`}`. If the running object never closes (truncated
+ * write, unterminated string), skip past the failed `{` and keep scanning
+ * for later valid objects on the same line — preventing a single garbled
+ * fragment from poisoning trailing valid records glued onto the same line.
+ */
 function splitJsonObjects(text: string): string[] {
   const objects: string[] = [];
-  let start: number | undefined;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
+  let cursor = 0;
 
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index];
+  while (cursor < text.length) {
+    let start: number | undefined;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let closedAt: number | undefined;
 
-    if (start === undefined) {
-      if (/\s/.test(char)) continue;
-      if (char !== '{') continue;
-      start = index;
-    }
+    for (let index = cursor; index < text.length; index++) {
+      const char = text[index];
 
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
+      if (start === undefined) {
+        // Skip whitespace and any garbage (incl. top-level arrays/scalars)
+        // before the next opening brace. See block comment above.
+        if (char !== '{') continue;
+        start = index;
       }
-      continue;
-    }
 
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === '\\') {
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
 
-    if (char === '{') {
-      depth++;
-      continue;
-    }
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
 
-    if (char === '}') {
-      depth--;
-      if (depth === 0 && start !== undefined) {
-        objects.push(text.slice(start, index + 1));
-        start = undefined;
+      if (char === '{') {
+        depth++;
+        continue;
+      }
+
+      if (char === '}') {
+        depth--;
+        if (depth === 0) {
+          closedAt = index;
+          objects.push(text.slice(start, index + 1));
+          break;
+        }
       }
     }
+
+    if (closedAt !== undefined) {
+      cursor = closedAt + 1;
+      continue;
+    }
+
+    // The trailing object never closed (unterminated string or missing brace).
+    // Skip past the failed opening brace and try to recover later top-level
+    // objects on the same line. If no opening brace was found at all, stop.
+    if (start === undefined) break;
+    cursor = start + 1;
   }
 
   return objects;
@@ -216,91 +268,24 @@ async function scanQwenJsonlFile(
 ): Promise<void> {
   if (!fs.existsSync(filePath)) return;
 
-  const decoder = new StringDecoder('utf8');
-  const stream = fs.createReadStream(filePath);
-  let lineBuffer = '';
-  let lineIndex = 0;
-  let skippingOversizedLine = false;
-  let stopped = false;
-
-  const finishLine = (): 'continue' | 'stop' => {
-    const line = lineBuffer.endsWith('\r') ? lineBuffer.slice(0, -1) : lineBuffer;
-    lineBuffer = '';
-
-    if (skippingOversizedLine) {
-      logger.debug('qwen-code: skipping oversized JSONL line at index', lineIndex, 'in', filePath);
-      skippingOversizedLine = false;
-      lineIndex++;
+  await scanJsonlLines(
+    filePath,
+    (line, lineIndex) => {
+      const chunks = splitJsonObjects(line);
+      if (chunks.length === 0 && line.trim()) {
+        logger.debug('qwen-code: skipping malformed JSONL line at index', lineIndex, 'in', filePath);
+      }
+      for (const chunk of chunks) {
+        try {
+          if (visitor(JSON.parse(chunk), lineIndex) === 'stop') return 'stop';
+        } catch (err) {
+          logger.debug('qwen-code: skipping invalid JSON object at index', lineIndex, 'in', filePath, err);
+        }
+      }
       return 'continue';
-    }
-
-    const chunks = splitJsonObjects(line);
-    if (chunks.length === 0 && line.trim()) {
-      logger.debug('qwen-code: skipping malformed JSONL line at index', lineIndex, 'in', filePath);
-    }
-
-    for (const chunk of chunks) {
-      try {
-        if (visitor(JSON.parse(chunk), lineIndex) === 'stop') {
-          lineIndex++;
-          return 'stop';
-        }
-      } catch (err) {
-        logger.debug('qwen-code: skipping invalid JSON object at index', lineIndex, 'in', filePath, err);
-      }
-    }
-
-    lineIndex++;
-    return 'continue';
-  };
-
-  const consumeText = (text: string): 'continue' | 'stop' => {
-    let start = 0;
-
-    while (start < text.length) {
-      const newlineIndex = text.indexOf('\n', start);
-      const segmentEnd = newlineIndex === -1 ? text.length : newlineIndex;
-      const segment = text.slice(start, segmentEnd);
-
-      if (!skippingOversizedLine) {
-        if (lineBuffer.length + segment.length > MAX_QWEN_JSONL_RECORD_CHARS) {
-          skippingOversizedLine = true;
-          lineBuffer = '';
-        } else {
-          lineBuffer += segment;
-        }
-      }
-
-      if (newlineIndex === -1) break;
-      if (finishLine() === 'stop') return 'stop';
-      start = newlineIndex + 1;
-    }
-
-    return 'continue';
-  };
-
-  try {
-    for await (const chunk of stream) {
-      if (consumeText(decoder.write(chunk as Buffer)) === 'stop') {
-        stopped = true;
-        stream.destroy();
-        break;
-      }
-    }
-
-    if (!stopped) {
-      const remaining = decoder.end();
-      if (remaining && consumeText(remaining) === 'stop') {
-        stopped = true;
-      }
-
-      if (!stopped && (lineBuffer.length > 0 || skippingOversizedLine)) {
-        finishLine();
-      }
-    }
-  } catch (err) {
-    logger.debug('qwen-code: failed to stream JSONL file', filePath, err);
-  }
+    },
+    { maxLineChars: MAX_QWEN_JSONL_RECORD_CHARS },
+  );
 }
 
 async function readJsonlRecords(filePath: string): Promise<QwenChatRecord[]> {
@@ -382,7 +367,13 @@ function collectParentFunctionCalls(records: QwenChatRecord[]): Map<string, Pare
       });
     }
 
-    if (calls.length > 0) callsByParent.set(record.uuid, calls);
+    if (calls.length > 0) {
+      // Merge across duplicate-UUID assistant fragments so earlier function
+      // calls aren't overwritten when the same record id is appended to the
+      // log multiple times.
+      const existing = callsByParent.get(record.uuid);
+      callsByParent.set(record.uuid, existing ? [...existing, ...calls] : calls);
+    }
   }
 
   return callsByParent;
@@ -465,7 +456,16 @@ async function findSessionFiles(): Promise<string[]> {
 // ── Session metadata extraction ─────────────────────────────────────────────
 
 async function extractSessionMeta(filePath: string): Promise<QwenSessionMeta | null> {
-  const fileStats = await getFileStats(filePath);
+  // One async stat covers both bytes and mtime, replacing two synchronous
+  // statSync calls on the parser hot path.
+  let fileStat: fs.Stats;
+  try {
+    fileStat = await fs.promises.stat(filePath);
+  } catch (err) {
+    logger.debug('qwen-code: failed to stat session file', filePath, err);
+    return null;
+  }
+
   let sessionId = '';
   let cwd = '';
   let gitBranch: string | undefined;
@@ -474,28 +474,46 @@ async function extractSessionMeta(filePath: string): Promise<QwenSessionMeta | n
   let firstTimestamp: string | undefined;
   let lastTimestamp: string | undefined;
   let model: string | undefined;
+  let lineCount = 0;
 
-  await scanQwenJsonlFile(filePath, (parsed, lineIndex) => {
-    const record = parseQwenChatRecord(parsed, filePath, lineIndex);
-    if (!record) return 'continue';
+  await scanJsonlLines(
+    filePath,
+    (line, lineIndex) => {
+      lineCount = lineIndex + 1;
+      const trimmed = line.trim();
+      if (!trimmed) return 'continue';
 
-    if (!sessionId && record.sessionId) sessionId = record.sessionId;
-    if (!cwd && record.cwd) cwd = record.cwd;
-    if (!gitBranch && record.gitBranch) gitBranch = record.gitBranch;
-    if (!model && record.model) model = record.model;
+      const chunks = splitJsonObjects(line);
+      for (const chunk of chunks) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(chunk);
+        } catch {
+          continue;
+        }
 
-    if (!firstTimestamp && record.timestamp) firstTimestamp = record.timestamp;
-    if (record.timestamp) lastTimestamp = record.timestamp;
+        const record = parseQwenChatRecord(parsed, filePath, lineIndex);
+        if (!record) continue;
 
-    if (record.type === 'user' && !firstUserMessage) {
-      firstUserMessage = extractContentText(record.message);
-    }
+        if (!sessionId && record.sessionId) sessionId = record.sessionId;
+        if (!cwd && record.cwd) cwd = record.cwd;
+        if (!gitBranch && record.gitBranch) gitBranch = record.gitBranch;
+        if (!model && record.model) model = record.model;
 
-    const title = extractCustomTitle(record);
-    if (title) customTitle = title;
+        if (!firstTimestamp && record.timestamp) firstTimestamp = record.timestamp;
+        if (record.timestamp) lastTimestamp = record.timestamp;
 
-    return 'continue';
-  });
+        if (record.type === 'user' && !firstUserMessage) {
+          firstUserMessage = extractContentText(record.message);
+        }
+
+        const title = extractCustomTitle(record);
+        if (title) customTitle = title;
+      }
+      return 'continue';
+    },
+    { maxLineChars: MAX_QWEN_JSONL_RECORD_CHARS },
+  );
 
   if (!sessionId) return null;
 
@@ -507,8 +525,9 @@ async function extractSessionMeta(filePath: string): Promise<QwenSessionMeta | n
     firstTimestamp,
     lastTimestamp,
     model,
-    lineCount: fileStats.lines,
-    bytes: fileStats.bytes,
+    lineCount,
+    bytes: fileStat.size,
+    mtime: fileStat.mtime,
   };
 }
 
@@ -932,7 +951,25 @@ function getLastMainRecordUuid(records: QwenChatRecord[]): string | undefined {
   return records.at(-1)?.uuid;
 }
 
-/** Reconstruct main conversation path by walking from the last appended record via parentUuid. */
+/**
+ * Reconstruct the main conversation path by walking parentUuid backwards from
+ * the last appended non-sidechain record. Mirrors upstream Qwen Code's
+ * `sessionService.reconstructHistory` (packages/core/src/services/sessionService.ts)
+ * which starts at `records[records.length - 1].uuid` (or a supplied leafUuid)
+ * and walks parents until the chain breaks.
+ *
+ * **Broken-chain policy:** when a parentUuid does not resolve in the current
+ * record set (incomplete log, deleted ancestor, or fork merge artefacts), we
+ * fall back to the full append-ordered `aggregated` set instead of truncating
+ * at the last valid ancestor. Upstream truncates because it owns the live
+ * session. We're a *handoff* — surfacing every appended turn keeps the
+ * receiving tool from silently losing work the user could see in Qwen Code's
+ * UI. The trade-off is that abandoned branches reappear on broken chains;
+ * that is the lesser evil for a one-shot context dump (open question #2 in
+ * the PR description, resolved deliberately).
+ *
+ * Cycle protection: `visited` guard breaks if a parent loop is detected.
+ */
 function reconstructMainPath(records: QwenChatRecord[]): QwenChatRecord[] {
   if (records.length === 0) return [];
 
@@ -974,7 +1011,6 @@ export async function parseQwenCodeSessions(): Promise<UnifiedSession[]> {
       const meta = await extractSessionMeta(filePath);
       if (!meta) continue;
 
-      const fileStats = fs.statSync(filePath);
       const summary = cleanSummary(meta.summary ?? '') || undefined;
 
       sessions.push({
@@ -985,8 +1021,8 @@ export async function parseQwenCodeSessions(): Promise<UnifiedSession[]> {
         branch: meta.gitBranch,
         lines: meta.lineCount,
         bytes: meta.bytes,
-        createdAt: parseTimestamp(meta.firstTimestamp, fileStats.mtime),
-        updatedAt: parseTimestamp(meta.lastTimestamp, fileStats.mtime),
+        createdAt: parseTimestamp(meta.firstTimestamp, meta.mtime),
+        updatedAt: parseTimestamp(meta.lastTimestamp, meta.mtime),
         originalPath: filePath,
         summary,
         model: meta.model,
