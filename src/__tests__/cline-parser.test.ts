@@ -327,6 +327,35 @@ describe('Cline-family parser hardening', () => {
     expect(context.sessionNotes?.rawAccess).toEqual({ kind: 'sqlite', path: dbPath });
   });
 
+  it('discovers and extracts Kilo Code sessions from an explicit KILO_DB path without requiring a .db suffix', async () => {
+    const home = makeHome();
+    const dbPath = writeKiloDb(path.join(home, 'custom-storage'), 'custom-kilo-store');
+    vi.stubEnv('KILO_DB', dbPath);
+
+    const { parseKiloCodeSessions, extractKiloCodeContext } = await loadClineParser(home);
+    const sessions = await parseKiloCodeSessions();
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      id: 'ses_kilo_db',
+      source: 'kilo-code',
+      originalPath: dbPath,
+      summary: 'Build DB-backed Kilo support',
+    });
+
+    const context = await extractKiloCodeContext(sessions[0]);
+
+    expect(context.recentMessages.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'Build DB-backed Kilo support'],
+      ['assistant', 'Kilo DB sessions are now parsed safely.'],
+    ]);
+    expect(context.sessionNotes?.rawAccess).toEqual({ kind: 'sqlite', path: dbPath });
+    expect(context.sessionNotes?.sourceMetadata).toMatchObject({
+      storage: 'sqlite',
+      dbPath,
+    });
+  });
+
   it('skips invalid JSON, non-array JSON, malformed entries, and metadata-only tasks during discovery', async () => {
     const home = makeHome();
     writeRawTask(home, 'saoudrizwan.claude-dev', 'invalid-json', '{not valid json');

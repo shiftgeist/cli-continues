@@ -996,7 +996,7 @@ async function extractContextShared(session: UnifiedSession, config?: VerbosityC
 }
 
 function isKiloDbSession(session: UnifiedSession): boolean {
-  return session.source === 'kilo-code' && path.extname(session.originalPath) === '.db';
+  return session.source === 'kilo-code' && path.basename(session.originalPath) !== 'ui_messages.json';
 }
 
 function emptyKiloDbContext(session: UnifiedSession, cfg: VerbosityConfig, fidelityWarnings: string[]): SessionContext {
