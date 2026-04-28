@@ -1,18 +1,21 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { VerbosityConfig } from '../config/index.js';
 import { getPreset } from '../config/index.js';
 import { logger } from '../logger.js';
 import type {
   ConversationMessage,
   SessionContext,
+  SessionEvent,
   SessionNotes,
   ToolUsageSummary,
   UnifiedSession,
 } from '../types/index.js';
+import { extractTextFromBlocks } from '../utils/content.js';
 import { findFiles } from '../utils/fs-helpers.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
-import { cleanSummary, homeDir } from '../utils/parser-helpers.js';
+import { cleanSummary, extractRepo, homeDir } from '../utils/parser-helpers.js';
 import { truncate } from '../utils/tool-summarizer.js';
 
 // ── Amp Thread JSON shape ───────────────────────────────────────────────────
@@ -28,6 +31,9 @@ interface AmpMessage {
   role: 'user' | 'assistant';
   messageId: number;
   content: AmpContentBlock[];
+  meta?: {
+    sentAt?: number;
+  };
 }
 
 interface AmpUsageEvent {
@@ -50,6 +56,14 @@ interface AmpThread {
   env?: {
     initial?: {
       tags?: string[];
+      trees?: Array<{
+        uri?: string;
+        repository?: {
+          url?: string;
+          ref?: string;
+          sha?: string;
+        };
+      }>;
     };
   };
 }
@@ -57,6 +71,14 @@ interface AmpThread {
 const AMP_BASE_DIR = process.env.XDG_DATA_HOME
   ? path.join(process.env.XDG_DATA_HOME, 'amp', 'threads')
   : path.join(homeDir(), '.local', 'share', 'amp', 'threads');
+
+function safeFileURLToPath(uri: string): string {
+  try {
+    return fileURLToPath(uri);
+  } catch {
+    return '';
+  }
+}
 
 /**
  * Find all Amp thread JSON files
@@ -69,36 +91,30 @@ function findSessionFiles(): string[] {
 }
 
 /**
- * Parse a single Amp thread file. Returns null on any parse error.
+ * Read and parse a thread file in a single pass — returns the parsed thread plus
+ * the raw text so callers can derive line counts without re-reading the file.
  */
-function parseThreadFile(filePath: string): AmpThread | null {
+function readThreadFile(filePath: string): { thread: AmpThread; raw: string } | null {
   try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    const data = JSON.parse(content);
-
-    // Minimal validation: must have id, created timestamp, and messages array
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const data = JSON.parse(raw);
     if (typeof data.id !== 'string' || typeof data.created !== 'number' || !Array.isArray(data.messages)) {
       logger.debug('amp: thread validation failed — missing id, created, or messages', filePath);
       return null;
     }
-
-    return data as AmpThread;
+    return { thread: data as AmpThread, raw };
   } catch (err) {
     logger.debug('amp: failed to parse thread file', filePath, err);
     return null;
   }
 }
 
-/**
- * Concatenate text from an Amp message's content blocks
- */
+function parseThreadFile(filePath: string): AmpThread | null {
+  return readThreadFile(filePath)?.thread ?? null;
+}
+
 function extractMessageText(message: AmpMessage): string {
-  if (!message.content || !Array.isArray(message.content)) return '';
-  return message.content
-    .filter((block) => block.type === 'text' && typeof block.text === 'string')
-    .map((block) => block.text!)
-    .join('\n')
-    .trim();
+  return extractTextFromBlocks(message.content).trim();
 }
 
 /**
@@ -129,14 +145,38 @@ function extractModel(thread: AmpThread): string | undefined {
   return undefined;
 }
 
+function extractAmpMetadata(thread: AmpThread): Pick<UnifiedSession, 'cwd' | 'repo' | 'branch' | 'gitSha'> {
+  const firstTree = thread.env?.initial?.trees?.[0];
+  const cwd = firstTree?.uri?.startsWith('file://') ? safeFileURLToPath(firstTree.uri) : '';
+  const repo = extractRepo({ gitUrl: firstTree?.repository?.url, cwd });
+  const ref = firstTree?.repository?.ref;
+  const branch = ref?.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
+
+  return {
+    cwd,
+    ...(repo ? { repo } : {}),
+    ...(branch ? { branch } : {}),
+    ...(firstTree?.repository?.sha ? { gitSha: firstTree.repository.sha } : {}),
+  };
+}
+
 /**
  * Extract session notes: model info and token usage from usageLedger
  */
-function extractSessionNotes(thread: AmpThread): SessionNotes {
+function extractSessionNotes(
+  thread: AmpThread,
+  metadata: Pick<UnifiedSession, 'cwd' | 'repo' | 'branch' | 'gitSha'> = extractAmpMetadata(thread),
+): SessionNotes {
   const notes: SessionNotes = {};
 
   const model = extractModel(thread);
   if (model) notes.model = model;
+  notes.sourceMetadata = {
+    ...(metadata.cwd ? { cwd: metadata.cwd } : {}),
+    ...(metadata.repo ? { repo: metadata.repo } : {}),
+    ...(metadata.branch ? { branch: metadata.branch } : {}),
+    ...(metadata.gitSha ? { gitSha: metadata.gitSha } : {}),
+  };
 
   // Accumulate token usage from ledger events, skipping title-generation
   const events = thread.usageLedger?.events;
@@ -175,22 +215,23 @@ export async function parseAmpSessions(): Promise<UnifiedSession[]> {
 
   for (const filePath of files) {
     try {
-      const thread = parseThreadFile(filePath);
-      if (!thread || !thread.id) continue;
+      const parsed = readThreadFile(filePath);
+      if (!parsed || !parsed.thread.id) continue;
+      const { thread, raw } = parsed;
 
       const firstUserMessage = extractFirstUserMessage(thread);
       const summary = cleanSummary(thread.title || firstUserMessage);
-
+      const metadata = extractAmpMetadata(thread);
       const fileStats = fs.statSync(filePath);
-      const content = fs.readFileSync(filePath, 'utf8');
-      const lines = content.split('\n').length;
 
       sessions.push({
         id: thread.id,
         source: 'amp',
-        cwd: '',
-        repo: '',
-        lines,
+        cwd: metadata.cwd || '',
+        repo: metadata.repo,
+        branch: metadata.branch,
+        gitSha: metadata.gitSha,
+        lines: raw.split('\n').length,
         bytes: fileStats.size,
         createdAt: new Date(thread.created),
         updatedAt: new Date(fileStats.mtimeMs),
@@ -221,7 +262,19 @@ export async function extractAmpContext(session: UnifiedSession, config?: Verbos
   let sessionNotes: SessionNotes | undefined;
 
   if (thread) {
-    sessionNotes = extractSessionNotes(thread);
+    // Compute metadata once and reuse for both sessionNotes and the enrichedSession.
+    const metadata = extractAmpMetadata(thread);
+    sessionNotes = extractSessionNotes(thread, metadata);
+    const enrichedSession: UnifiedSession = {
+      ...session,
+      cwd: session.cwd || metadata.cwd || '',
+      repo: session.repo || metadata.repo,
+      branch: session.branch || metadata.branch,
+      gitSha: session.gitSha || metadata.gitSha,
+      model: session.model || sessionNotes.model,
+    };
+    const timeline: SessionEvent[] = [];
+    let sequence = 0;
 
     // Convert Amp messages to unified ConversationMessage format.
     // Slice to recent window (×2 to account for user+assistant pairs, matching gemini pattern).
@@ -233,8 +286,16 @@ export async function extractAmpContext(session: UnifiedSession, config?: Verbos
         recentMessages.push({
           role: msg.role,
           content: text,
-          // Amp threads don't carry per-message timestamps; use thread creation as fallback
-          timestamp: new Date(thread.created),
+          timestamp: new Date(msg.meta?.sentAt ?? thread.created),
+          sourceId: String(msg.messageId),
+        });
+        timeline.push({
+          kind: 'message',
+          sequence: sequence++,
+          role: msg.role,
+          content: text,
+          timestamp: new Date(msg.meta?.sentAt ?? thread.created),
+          sourceId: String(msg.messageId),
         });
       }
     }
@@ -268,6 +329,30 @@ export async function extractAmpContext(session: UnifiedSession, config?: Verbos
         }
       }
     }
+    const trimmed = recentMessages.slice(-cfg.recentMessages);
+
+    const markdown = generateHandoffMarkdown(
+      enrichedSession,
+      trimmed,
+      filesModified,
+      pendingTasks,
+      toolSummaries,
+      sessionNotes,
+      cfg,
+      'inline',
+      timeline,
+    );
+
+    return {
+      session: enrichedSession,
+      recentMessages: trimmed,
+      filesModified,
+      pendingTasks,
+      toolSummaries,
+      sessionNotes,
+      timeline,
+      markdown,
+    };
   }
 
   const trimmed = recentMessages.slice(-cfg.recentMessages);
@@ -283,7 +368,7 @@ export async function extractAmpContext(session: UnifiedSession, config?: Verbos
   );
 
   return {
-    session: sessionNotes?.model ? { ...session, model: sessionNotes.model } : session,
+    session,
     recentMessages: trimmed,
     filesModified,
     pendingTasks,
