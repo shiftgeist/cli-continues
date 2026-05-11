@@ -1,14 +1,14 @@
 import * as fs from 'node:fs';
-import * as readline from 'node:readline';
 import * as path from 'node:path';
 import type { VerbosityConfig } from '../config/index.js';
 import { getPreset } from '../config/index.js';
 import { logger } from '../logger.js';
 import type { ConversationMessage, SessionContext, SessionParseOptions, UnifiedSession } from '../types/index.js';
 import { findFiles } from '../utils/fs-helpers.js';
+import { readJsonlFile, scanJsonlHead } from '../utils/jsonl.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { extractRepoFromCwd, homeDir, trimMessages } from '../utils/parser-helpers.js';
-import { fileSummary, fetchSummary, grepSummary, mcpSummary, searchSummary, shellSummary, subagentSummary, SummaryCollector } from '../utils/tool-summarizer.js';
+import { fetchSummary, fileSummary, grepSummary, mcpSummary, searchSummary, shellSummary, subagentSummary, SummaryCollector } from '../utils/tool-summarizer.js';
 
 function getVibeSessionsDir(): string {
   const configured = process.env.VIBE_HOME?.trim();
@@ -39,20 +39,6 @@ interface VibeMessage {
   tool_calls?: VibeToolCall[];
   name?: string;
   tool_call_id?: string;
-}
-
-async function parseMessages(messagesPath: string): Promise<VibeMessage[]> {
-  const messages: VibeMessage[] = [];
-  const rl = readline.createInterface({ input: fs.createReadStream(messagesPath), crlfDelay: Infinity });
-  for await (const line of rl) {
-    if (!line.trim()) continue;
-    try {
-      messages.push(JSON.parse(line) as VibeMessage);
-    } catch {
-      continue;
-    }
-  }
-  return messages;
 }
 
 function extractConversationMessages(messages: VibeMessage[]): ConversationMessage[] {
@@ -90,11 +76,21 @@ export async function parseMistralVibeSessions(_options?: SessionParseOptions): 
       const createdAt = new Date(meta.start_time ?? stats.birthtimeMs);
       const updatedAt = new Date(meta.end_time ?? stats.mtimeMs);
 
-      const messages = await parseMessages(messagesPath);
-      const conversationMessages = extractConversationMessages(messages);
-      if (conversationMessages.length === 0) continue;
+      // Scan only the first ~30 lines to get summary without reading the full file.
+      // meta.title is preferred; fall back to the first non-injected user message.
+      let firstUserText = '';
+      let hasConversation = false;
+      await scanJsonlHead(messagesPath, 30, (parsed) => {
+        const msg = parsed as VibeMessage;
+        if (msg.injected || (msg.role !== 'user' && msg.role !== 'assistant')) return 'continue';
+        const text = msg.content?.trim() ?? '';
+        if (!text) return 'continue';
+        hasConversation = true;
+        if (msg.role === 'user' && !firstUserText) firstUserText = text;
+        return firstUserText ? 'stop' : 'continue';
+      });
+      if (!hasConversation) continue;
 
-      const firstUserText = conversationMessages.find((m) => m.role === 'user')?.content ?? '';
       const summary =
         (meta.title && meta.title.length > 0 ? meta.title : firstUserText).slice(0, 80).replace(/\s+/g, ' ').trim() ||
         undefined;
@@ -106,7 +102,7 @@ export async function parseMistralVibeSessions(_options?: SessionParseOptions): 
         repo: extractRepoFromCwd(cwd),
         branch: meta.git_branch,
         summary,
-        lines: conversationMessages.length,
+        lines: 0,
         bytes: stats.size,
         createdAt,
         updatedAt,
@@ -125,9 +121,8 @@ export async function extractMistralVibeContext(session: UnifiedSession, config?
   const resolvedConfig = config ?? getPreset('standard');
   const collector = new SummaryCollector(resolvedConfig);
 
-  const metaPath = path.join(session.originalPath, 'meta.json');
   const messagesPath = path.join(session.originalPath, 'messages.jsonl');
-  const messages = await parseMessages(messagesPath);
+  const messages = await readJsonlFile<VibeMessage>(messagesPath);
 
   const recentMessages: ConversationMessage[] = [];
 

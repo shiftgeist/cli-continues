@@ -1,11 +1,11 @@
 import * as fs from 'node:fs';
-import * as readline from 'node:readline';
 import * as path from 'node:path';
 import type { VerbosityConfig } from '../config/index.js';
 import { getPreset } from '../config/index.js';
 import { logger } from '../logger.js';
 import type { ConversationMessage, SessionContext, SessionParseOptions, UnifiedSession } from '../types/index.js';
 import { findFiles } from '../utils/fs-helpers.js';
+import { scanJsonlFile } from '../utils/jsonl.js';
 import { generateHandoffMarkdown } from '../utils/markdown.js';
 import { homeDir, trimMessages } from '../utils/parser-helpers.js';
 
@@ -79,16 +79,8 @@ async function parseJsonlSession(filePath: string): Promise<ParsedJsonlSession |
   const turns: VscodeChatTurn[] = [];
   let lastTimestamp = 0;
 
-  const rl = readline.createInterface({ input: fs.createReadStream(filePath), crlfDelay: Infinity });
-  for await (const line of rl) {
-    if (!line.trim()) continue;
-    let entry: { kind: number; v: unknown };
-    try {
-      entry = JSON.parse(line) as { kind: number; v: unknown };
-    } catch {
-      continue;
-    }
-
+  await scanJsonlFile(filePath, (parsed) => {
+    const entry = parsed as { kind: number; v: unknown };
     if (entry.kind === 0 && entry.v && typeof entry.v === 'object' && !Array.isArray(entry.v)) {
       const v = entry.v as VscodeChatSessionMeta;
       if (v.sessionId) meta.sessionId = v.sessionId;
@@ -107,7 +99,8 @@ async function parseJsonlSession(filePath: string): Promise<ParsedJsonlSession |
         if (turn.timestamp && turn.timestamp > lastTimestamp) lastTimestamp = turn.timestamp;
       }
     }
-  }
+    return 'continue';
+  });
 
   if (!meta.sessionId && turns.length === 0) return null;
   return { meta, title, turns, lastTimestamp };
