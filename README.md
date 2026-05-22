@@ -2,6 +2,22 @@
 
 > You hit the rate limit mid-debug. 30 messages of context — file changes, architecture decisions, half-finished refactors — and now you either wait hours or start fresh in another tool. **`continues` grabs your session from whichever AI coding tool you were using and hands it off to another one.** Conversation history, file changes, working state — all of it comes along.
 
+## Using this fork
+
+```sh
+pnpm install
+pnpm run build
+node dist/cli.js
+alias continues="node $(pwd)/dist/cli.js"
+alias cont="node $(pwd)/dist/cli.js"
+```
+
+Included PRs
+
+- `feat: add --in flag to quick-resume commands` by @austinbrownapfm https://github.com/yigitkonur/cli-continues/pull/68
+
+---
+
 ```bash
 npx continues
 ```
