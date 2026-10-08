@@ -3,7 +3,7 @@
 > You hit the rate limit mid-debug. 30 messages of context — file changes, architecture decisions, half-finished refactors — and now you either wait hours or start fresh in another tool. **`continues` grabs your session from whichever AI coding tool you were using and hands it off to another one.** Conversation history, file changes, working state — all of it comes along.
 
 ```bash
-npx continues
+pnpx github:shiftgeist/cli-continues
 ```
 
 https://github.com/user-attachments/assets/6945f3a5-bd19-45ab-9702-6df8e165a734

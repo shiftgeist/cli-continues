@@ -12,11 +12,13 @@
     "./cli": "./dist/cli.js"
   },
   "bin": {
-    "continues": "dist/cli.js",
-    "cont": "dist/cli.js"
+    "continues": "bin/continues.js",
+    "cont": "bin/continues.js"
   },
   "type": "module",
   "files": [
+    "bin",
+    "src",
     "dist",
     "README.md",
     "LICENSE"
@@ -79,14 +81,15 @@
     "chalk": "^4.1.2",
     "commander": "^14.0.3",
     "ora": "^5.4.1",
+    "tsx": "4.21.0",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
     "@types/node": "^25.1.0",
-    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
-  }
+  },
+  "packageManager": "pnpm@12.10.1+sha512.ba40a37eb1a370d60fea8c4cf1d364c13bcccef518e98ad2bcee954f539d38da37458e58261a3fa55e06523450ea0ffff9f497b135be41f2c15c1642bacace6c"
 }
