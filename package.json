@@ -74,22 +74,22 @@
     "version:major": "npm version major"
   },
   "dependencies": {
-    "@clack/prompts": "^1.0.1",
-    "chalk": "^4.1.2",
-    "commander": "^14.0.3",
-    "ora": "^5.4.1",
+    "@clack/prompts": "^1.8.1",
+    "chalk": "^6.0.1",
+    "commander": "^15.0.0",
+    "ora": "^9.4.1",
     "tsx": "4.23.15",
-    "yaml": "^2.8.2",
-    "zod": "^4.3.6"
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.4",
+    "@biomejs/biome": "^2.5.15",
     "@types/node": "^26.6.5",
-    "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
   },
   "packageManager": "pnpm@12.14.0+sha512.c18ba6d87993d3d164cb5e8948f32b2c06ee854487e06cd8d86781342fb3e5bb4634367034711e86802baa9c37bea906ce1929ad08d70884c97d801df13389a6",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.12.0"
   }
 }
