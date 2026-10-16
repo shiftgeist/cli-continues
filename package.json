@@ -2,8 +2,39 @@
   "name": "continues",
   "version": "4.1.1",
   "description": "Never lose context. Resume any AI coding session across Claude Code, Codex, Copilot, Gemini CLI, Cursor, Amp, Cline, Roo Code, Kilo Code, Kiro, Crush, OpenCode, Droid & Antigravity.",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "keywords": [
+    "ai",
+    "coding-assistant",
+    "codex",
+    "claude",
+    "copilot",
+    "gemini",
+    "opencode",
+    "droid",
+    "factory",
+    "session",
+    "resume",
+    "context",
+    "cli",
+    "developer-tools",
+    "productivity",
+    "rate-limit",
+    "session-handoff",
+    "context-switch",
+    "cross-tool",
+    "cursor"
+  ],
+  "homepage": "https://github.com/yigitkonur/cli-continues#readme",
+  "bugs": {
+    "url": "https://github.com/yigitkonur/cli-continues/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yigitkonur/cli-continues.git"
+  },
+  "license": "MIT",
+  "author": "Yigit Konur",
+  "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -11,11 +42,12 @@
     },
     "./cli": "./dist/cli.js"
   },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
-    "continues": "bin/continues.js",
-    "cont": "bin/continues.js"
+    "cont": "bin/continues.js",
+    "continues": "bin/continues.js"
   },
-  "type": "module",
   "files": [
     "bin",
     "src",
@@ -41,41 +73,6 @@
     "version:minor": "npm version minor",
     "version:major": "npm version major"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/yigitkonur/cli-continues.git"
-  },
-  "keywords": [
-    "ai",
-    "coding-assistant",
-    "codex",
-    "claude",
-    "copilot",
-    "gemini",
-    "opencode",
-    "droid",
-    "factory",
-    "session",
-    "resume",
-    "context",
-    "cli",
-    "developer-tools",
-    "productivity",
-    "rate-limit",
-    "session-handoff",
-    "context-switch",
-    "cross-tool",
-    "cursor"
-  ],
-  "author": "Yigit Konur",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/yigitkonur/cli-continues/issues"
-  },
-  "homepage": "https://github.com/yigitkonur/cli-continues#readme",
-  "engines": {
-    "node": ">=22.5.0"
-  },
   "dependencies": {
     "@clack/prompts": "^1.0.1",
     "chalk": "^4.1.2",
@@ -87,9 +84,12 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
-    "@types/node": "^25.1.0",
+    "@types/node": "^26.6.5",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },
-  "packageManager": "pnpm@12.10.1+sha512.ba40a37eb1a370d60fea8c4cf1d364c13bcccef518e98ad2bcee954f539d38da37458e58261a3fa55e06523450ea0ffff9f497b135be41f2c15c1642bacace6c"
+  "packageManager": "pnpm@12.10.1+sha512.ba40a37eb1a370d60fea8c4cf1d364c13bcccef518e98ad2bcee954f539d38da37458e58261a3fa55e06523450ea0ffff9f497b135be41f2c15c1642bacace6c",
+  "engines": {
+    "node": ">=22.5.0"
+  }
 }
