@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +27,18 @@ describe('GitHub installation', () => {
       expect(execFileSync(process.execPath, [entry, '--version'], { cwd: install, encoding: 'utf8' }).trim()).toBe(
         manifest.version,
       );
+      const registration = spawnSync(
+        process.execPath,
+        [
+          '--trace-deprecation',
+          '--input-type=module',
+          '--eval',
+          "const { register } = await import('tsx/esm/api'); register();",
+        ],
+        { cwd: install, encoding: 'utf8' },
+      );
+      expect(registration.status).toBe(0);
+      expect(registration.stderr).not.toContain('DEP0205');
     } finally {
       rmSync(install, { recursive: true, force: true });
     }
